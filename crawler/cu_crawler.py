@@ -4,9 +4,6 @@ import time
 from datetime import datetime, timedelta
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 from bs4 import BeautifulSoup
 
 try:
@@ -53,6 +50,21 @@ class CUCrawler:
         driver = webdriver.Chrome(options=chrome_options)
         return driver
     
+    def extract_gdidx(self, item):
+        """onclick=view(26285) 에서 gdIdx 추출"""
+        try:
+            # onclick 속성 찾기
+            clickable = item.find(attrs={'onclick': True})
+            if clickable:
+                onclick = clickable.get('onclick', '')
+                # view(26285) 패턴에서 숫자 추출
+                match = re.search(r'view\((\d+)\)', onclick)
+                if match:
+                    return match.group(1)
+        except:
+            pass
+        return None
+    
     def crawl_category(self, driver, category_url, category_name):
         print(f"\n📂 {category_name} 크롤링 중...")
         products = []
@@ -61,109 +73,87 @@ class CUCrawler:
             driver.get(category_url)
             time.sleep(5)
             
+            # 페이지 스크롤
+            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+            time.sleep(2)
+            
             soup = BeautifulSoup(driver.page_source, 'html.parser')
             
-            # 제품 리스트 찾기 - 더 정확한 선택자 사용
-            product_items = soup.select('div.prodListWrap ul.prodList li')
+            # 제품 영역 찾기
+            product_area = soup.select_one('.prodListWrap, .prodArea')
+            if not product_area:
+                print(f"  ⚠️ 제품 영역을 찾을 수 없습니다")
+                return products
             
-            if not product_items:
-                product_items = soup.select('ul.prodList > li')
+            # 제품 항목 찾기
+            items = product_area.select('li')
+            print(f"  🔍 {len(items)}개 항목 발견")
             
-            if not product_items:
-                product_items = soup.select('div[class*="prod"] li')
-            
-            print(f"  🔍 {len(product_items)}개 아이템 발견")
-            
-            for idx, item in enumerate(product_items[:30]):
+            for item in items:
                 try:
-                    # 1. 링크 먼저 추출 (가장 중요)
-                    link_tag = item.find('a')
-                    if not link_tag or not link_tag.get('href'):
+                    # 1. 제품 이미지 확인
+                    img = item.select_one('img[src*="/product/"]')
+                    if not img:
                         continue
                     
-                    href = link_tag.get('href')
+                    image_url = img.get('src', '')
                     
-                    # javascript: 링크는 무시 (상세 페이지 아님)
-                    if 'javascript' in href or href == '#':
+                    # New 태그나 아이콘 제외
+                    if 'icon' in image_url or 'tag_' in image_url or 'blank' in image_url:
                         continue
                     
-                    # 개별 상품 상세 페이지 URL 구성
-                    if href.startswith('http'):
-                        source_url = href
-                    elif href.startswith('/'):
-                        source_url = self.base_url + href
+                    # HTTPS 변환
+                    if image_url.startswith('//'):
+                        image_url = 'https:' + image_url
+                    elif not image_url.startswith('http'):
+                        image_url = self.base_url + image_url
+                    
+                    # 2. 제품명 추출
+                    name_tag = item.select_one('p')
+                    if not name_tag:
+                        continue
+                    
+                    title = name_tag.get_text(strip=True)
+                    
+                    # 제품명 검증
+                    if not title or len(title) < 2:
+                        continue
+                    
+                    # 파일명이나 New 제외
+                    if title.endswith('.jpg') or title.endswith('.png') or title == 'New':
+                        continue
+                    
+                    # 3. gdIdx 추출 (상세 페이지 URL)
+                    gdidx = self.extract_gdidx(item)
+                    
+                    if gdidx:
+                        source_url = f"{self.base_url}/product/view.do?gdIdx={gdidx}&category=product"
                     else:
-                        source_url = self.base_url + '/' + href
+                        source_url = category_url  # gdIdx 없으면 카테고리 페이지
                     
-                    # 상세페이지 링크가 아니면 스킵
-                    if 'goodsDetail' not in source_url and 'itemId' not in source_url:
-                        continue
-                    
-                    # 2. 이미지 추출
-                    img_tag = item.find('img')
-                    if not img_tag:
-                        continue
-                        
-                    image_url = img_tag.get('src')
-                    if not image_url or 'blank' in image_url or 'noimage' in image_url:
-                        continue
-                        
-                    if not image_url.startswith('http'):
-                        if image_url.startswith('//'):
-                            image_url = 'https:' + image_url
-                        else:
-                            image_url = self.base_url + image_url
-                    
-                    # 3. 제목 추출
-                    title = img_tag.get('alt')
-                    
-                    if not title or len(title) < 2:
-                        # alt가 없으면 name 클래스에서 찾기
-                        name_tag = item.select_one('.name, .prodName, .prod_name, p.name')
-                        if name_tag:
-                            title = name_tag.get_text(strip=True)
-                    
-                    if not title or len(title) < 2:
-                        continue
-                    
-                    # 파일명이 제목인 경우 스킵 (실제 상품명이 아님)
-                    if title.endswith('.jpg') or title.endswith('.png'):
-                        # 상세 페이지에서 제목 추출 시도
-                        try:
-                            driver.get(source_url)
-                            time.sleep(2)
-                            detail_soup = BeautifulSoup(driver.page_source, 'html.parser')
-                            title_elem = detail_soup.select_one('.prodTitle, .prod_tit, h3, .title')
-                            if title_elem:
-                                title = title_elem.get_text(strip=True)
-                            driver.back()
-                            time.sleep(1)
-                        except:
-                            continue
-                    
-                    # 여전히 파일명이면 스킵
-                    if title.endswith('.jpg') or title.endswith('.png'):
-                        continue
-
                     # 4. 가격 추출
                     price = 0
-                    price_tag = item.select_one('.price, .val, span.val, .cost')
+                    price_tag = item.select_one('.price, .val, span[class*="price"]')
                     
                     if price_tag:
                         price_text = price_tag.get_text()
                         numbers = re.findall(r'\d+', price_text.replace(',', ''))
                         if numbers:
-                            price = max([int(n) for n in numbers if 100 <= int(n) < 1000000])
+                            valid = [int(n) for n in numbers if 100 <= int(n) < 1000000]
+                            if valid:
+                                price = max(valid)
                     
-                    # 가격이 없으면 전체 텍스트에서 추출
+                    # 가격 없으면 전체 텍스트에서
                     if price == 0:
-                        text = item.get_text()
-                        numbers = re.findall(r'\d+', text.replace(',', ''))
-                        if numbers:
-                            # 합리적인 가격 범위만 선택 (100원 ~ 100만원)
-                            valid_prices = [int(n) for n in numbers if 100 <= int(n) < 1000000]
-                            if valid_prices:
-                                price = max(valid_prices)
+                        all_text = item.get_text()
+                        matches = re.findall(r'(\d{1,3}(?:,\d{3})*|\d+)\s*원', all_text)
+                        if matches:
+                            price = int(matches[0].replace(',', ''))
+                    
+                    # 5. 카테고리 키워드 검증
+                    if not self.validate_category(title, category_name):
+                        print(f"    ⚠️ 카테고리 불일치 스킵: {title}")
+                        continue
                     
                     # 결과 추가
                     product = {
@@ -179,15 +169,34 @@ class CUCrawler:
                     }
                     
                     products.append(product)
-                    print(f"    ✓ {title[:30]} ({price}원)")
+                    print(f"    ✓ {title} ({price}원) [{gdidx or 'N/A'}]")
                     
                 except Exception as e:
                     continue
+            
+            print(f"  ✅ {len(products)}개 수집 완료")
             
         except Exception as e:
             print(f"  ❌ {category_name} 오류: {e}")
         
         return products
+    
+    def validate_category(self, title, category):
+        """카테고리별 키워드로 검증"""
+        title_lower = title.lower()
+        
+        keywords = {
+            '아이스크림': ['아이스크림', '빙과', '콘', '바', '슬러시', '아이스', 'ice', '소프트', '젤라또', '셔벗', '소르베', '팝콘'],
+            '과자류': ['과자', '스낵', '칩', '쿠키', '비스킷', '초콜릿', '사탕', '젤리', '껌', '캔디', '웨하스', '크래커'],
+            '음료': ['음료', '주스', '커피', '차', '워터', '탄산', '에너지', '이온', '밀크', '라떼', '에이드', '스무디'],
+            '간편식사': ['도시락', '김밥', '샌드위치', '삼각', '주먹밥', '햄버거', '핫도그', '토스트', '롤', '랩'],
+            '식품': ['라면', '컵라면', '우유', '빵', '계란', '치즈', '햄', '소시지', '두부', '김', '냉동']
+        }
+        
+        if category in keywords:
+            return any(keyword in title_lower for keyword in keywords[category])
+        
+        return True
     
     def crawl(self):
         print("🏪 CU 신제품 크롤링 시작...")
@@ -219,32 +228,36 @@ class CUCrawler:
     
     def save_to_db(self, products):
         if not products:
+            print("⚠️ 저장할 제품이 없습니다")
             return 0
         
         print(f"\n💾 DB 저장 시작... ({len(products)}개)")
+        
         try:
-            # 중복 제거 (같은 normalized_title)
+            # 중복 제거
             seen = set()
             unique_products = []
             for p in products:
-                key = p['normalized_title'] + p['category']
+                key = f"{p['normalized_title']}_{p['category']}"
                 if key not in seen:
                     seen.add(key)
                     unique_products.append(p)
             
             print(f"  📦 중복 제거 후: {len(unique_products)}개")
             
-            # 배치로 저장
+            # 배치 저장
             self.supabase.table('new_products').upsert(
-                unique_products, 
+                unique_products,
                 on_conflict='normalized_title,launch_date'
             ).execute()
             
             print(f"✅ {len(unique_products)}개 저장 완료!")
             return len(unique_products)
-                
+            
         except Exception as e:
-            print(f"⚠️ Batch 저장 실패, 개별 저장 시도...")
+            print(f"⚠️ Batch 저장 실패: {e}")
+            print(f"  개별 저장 시도...")
+            
             success_count = 0
             for p in unique_products:
                 try:
@@ -252,6 +265,7 @@ class CUCrawler:
                     success_count += 1
                 except:
                     pass
+            
             print(f"✅ {success_count}개 저장 완료 (개별)")
             return success_count
 
@@ -259,9 +273,15 @@ def main():
     try:
         crawler = CUCrawler()
         products = crawler.crawl()
-        crawler.save_to_db(products)
+        
+        if products:
+            crawler.save_to_db(products)
+        else:
+            print("❌ 수집된 제품이 없습니다")
+            exit(1)
+            
     except Exception as e:
-        print(e)
+        print(f"❌ 크롤러 오류: {e}")
         exit(1)
 
 if __name__ == "__main__":
