@@ -11,25 +11,79 @@ SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY")
 MAX_SEARCH_PAGES = 100
 CHUNK_SIZE = 50
 
-# ✅ CU 모든 카테고리
-CATEGORIES = [
-    {"id": "40", "name": "아이스크림"},
-    {"id": "30", "name": "과자류"},
-    {"id": "10", "name": "간편식사"},
-    {"id": "20", "name": "식품"},
-    {"id": "60", "name": "음료"},
-    {"id": "50", "name": "생활용품"},
-]
-def parse_product(item, category_name):
-    """상품 파싱"""
-    try:
-        name_tag = item.select_one(".name p")
-        title = (name_tag.get_text(strip=True) if name_tag else "").strip()
-        
-        price_tag = item.select_one(".price strong")
-        price_text = (price_tag.get_text(strip=True) if price_tag else "0").replace(",", "").replace("원", "")
-        price = int(price_text) if price_text.isdigit() else 0
+# ✅ 통합 카테고리 (브랜드별)
+BRANDS = {
+    "CU": {
+        "id": 1,
+        "base_url": "https://cu.bgfretail.com",
+        "ajax_url": "https://cu.bgfretail.com/product/productAjax.do",
+        "categories": [
+            {"id": "40", "name": "아이스크림"},
+            {"id": "30", "name": "과자류"},
+            {"id": "10", "name": "간편식사"},
+            {"id": "20", "name": "식품"},
+            {"id": "60", "name": "음료"},
+            {"id": "50", "name": "생활용품"},
+        ]
+    },
+    "GS25": {
+        "id": 2,
+        "base_url": "https://gs25.gsretail.com",
+        "ajax_url": "https://gs25.gsretail.com/goods/goodsListAjax.do", 
+        "categories": [
+            {"id": "1001", "name": "아이스크림"},  # 실제 ID는 사이트에서 확인
+            {"id": "1002", "name": "과자류"},
+            {"id": "1003", "name": "간편식사"},
+            {"id": "1004", "name": "식품"},
+            {"id": "1005", "name": "음료"},
+            {"id": "1006", "name": "생활용품"},
+        ]
+    }
+}
 
+def parse_product(item, category_name, brand_info):
+    """브랜드별 상품 파싱"""
+    try:
+        if brand_info["id"] == 1:  # CU
+            name_tag = item.select_one(".name p")
+            price_tag = item.select_one(".price strong")
+            onclick_div = item.select_one("div[onclick*='view']")
+            
+            title = (name_tag.get_text(strip=True) if name_tag else "").strip()
+            price_text = (price_tag.get_text(strip=True) if price_tag else "0").replace(",", "").replace("원", "")
+            price = int(price_text) if price_text.isdigit() else 0
+            
+            # CU gdIdx
+            gdIdx = None
+            if onclick_div:
+                onclick = onclick_div.get("onclick", "")
+                m = re.search(r"view\\s*\\(\\s*(\\d+)\\s*\\)", onclick)
+                if m:
+                    gdIdx = int(m.group(1))
+            external_id = gdIdx
+            
+        else:  # GS25
+            name_tag = item.select_one(".goods_info .name, .name")
+            price_tag = item.select_one(".goods_info .price, .price")
+            
+            title = (name_tag.get_text(strip=True) if name_tag else "").strip()
+            price_text = (price_tag.get_text(strip=True) if price_tag else "0").replace(",", "").replace("원", "")
+            price = int(price_text) if price_text.isdigit() else 0
+            
+            # GS25 goodsNo
+            external_id = None
+            data_goods = item.get("data-goods-no")
+            if data_goods:
+                external_id = int(data_goods)
+            else:
+                onclick_div = item.select_one("[onclick]")
+                if onclick_div:
+                    onclick = onclick_div.get("onclick", "")
+                    m = re.search(r"(?:fnDetailView|detail)\s*\(\s*'(\d+)'", onclick)
+                    if m:
+                        external_id = int(m.group(1))
+
+        # 공통 이미지 처리
         img_tag = item.select_one("img")
         image_url = ""
         if img_tag:
@@ -37,23 +91,14 @@ def parse_product(item, category_name):
             if image_url.startswith("//"):
                 image_url = "https:" + image_url
             elif image_url.startswith("/"):
-                image_url = "https://cu.bgfretail.com" + image_url
+                image_url = brand_info["base_url"] + image_url
 
-        badge_tag = item.select_one(".badge")
+        badge_tag = item.select_one(".badge, .ico_event, .event")
         promotion_type = badge_tag.get_text(strip=True) if badge_tag else None
-
-        # ✅ gdIdx 추출
-        gdIdx = None
-        onclick_div = item.select_one("div[onclick*='view']")
-        if onclick_div:
-            onclick = onclick_div.get("onclick", "")
-            m = re.search(r"view\s*\(\s*(\d+)\s*\)", onclick)
-            if m:
-                gdIdx = int(m.group(1))
         
-        product_url = f"https://cu.bgfretail.com/product/view.do?gdIdx={gdIdx}&category=product" if gdIdx else "https://cu.bgfretail.com/product/view.do?category=product"
+        product_url = f"{brand_info['base_url']}/product/view.do?gdIdx={external_id}" if brand_info["id"] == 1 else f"{brand_info['base_url']}/goods/goodsView.do?goodsNo={external_id}"
         
-        if not title:
+        if not title or external_id is None:
             return None
 
         return {
@@ -62,56 +107,71 @@ def parse_product(item, category_name):
             "image_url": image_url,
             "category": category_name,
             "promotion_type": promotion_type,
-            "source_url": product_url,
+            "source_url": product_url if external_id else brand_info["base_url"],
             "is_active": True,
-            "brand_id": 1,
-            "external_id": gdIdx
+            "brand_id": brand_info["id"],
+            "external_id": external_id
         }
     except Exception as e:
-        print(f"파싱 에러: {e}")
+        print(f"파싱 에러 ({brand_info['id']}): {e}")
         return None
 
-def fetch_new_products(supabase, category_id, category_name, max_gdIdx):
-    """신상품만 크롤링"""
+def fetch_new_products(supabase, brand_info, category_id, category_name, max_external_id):
+    """브랜드/카테고리별 신상품 크롤링"""
     new_products = []
-    print(f"\n🔄 [{category_name}] max_gdIdx={max_gdIdx}보다 큰 상품 찾기...")
+    brand_name = "CU" if brand_info["id"] == 1 else "GS25"
+    
+    print(f"\n🔄 [{brand_name} {category_name}] max_id={max_external_id}보다 큰 상품...")
     
     for page in range(1, MAX_SEARCH_PAGES + 1):
-        url = "https://cu.bgfretail.com/product/productAjax.do"
-        payload = {
-            "pageIndex": page, 
-            "searchMainCategory": category_id,
-            "listType": 0
-        }
-        headers = {
-            "User-Agent": "Mozilla/5.0",
-            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-        }
+        if brand_info["id"] == 1:  # CU
+            payload = {
+                "pageIndex": page,
+                "searchMainCategory": category_id,
+                "listType": 0
+            }
+            headers = {
+                "User-Agent": "Mozilla/5.0",
+                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+            }
+        else:  # GS25
+            payload = {
+                "nowPage": page,
+                "cateNo": category_id,
+                "dispCtgryNo": "",
+                "searchType": "",
+                "searchWord": "",
+                "sortType": "01",
+                "listLimt": "48"
+            }
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                "Referer": f"{brand_info['base_url']}/goods/goodsList.do",
+            }
 
         try:
-            r = requests.post(url, data=payload, headers=headers, timeout=8)
+            r = requests.post(brand_info["ajax_url"], data=payload, headers=headers, timeout=10)
             r.encoding = "utf-8"
             soup = BeautifulSoup(r.text, "html.parser")
-            items = soup.select("li.prod_list")
-
+            
+            # 브랜드별 선택자
+            selector = "li.prod_list" if brand_info["id"] == 1 else "ul.goods_list li.goods_item, li.goods_item"
+            items = soup.select(selector)
+            
             if not items:
                 print(f"  🛑 페이지 {page}: 끝! (총 {len(new_products)}개)")
                 break
             
             count_in_page = 0
             for item in items:
-                p = parse_product(item, category_name)
-                if p and p['external_id'] is not None:
-                    if p['external_id'] > max_gdIdx:
-                        new_products.append(p)
-                        count_in_page += 1
+                p = parse_product(item, category_name, brand_info)
+                if p and p['external_id'] > max_external_id:
+                    new_products.append(p)
+                    count_in_page += 1
             
-            if count_in_page > 0:
-                print(f"  ✅ 페이지 {page}: 신상품 {count_in_page}개 (누적 {len(new_products)})")
-            else:
-                print(f"  PASS 페이지 {page}")
-            
-            time.sleep(0.1)
+            print(f"  ✅ 페이지 {page}: {count_in_page}개 (누적 {len(new_products)})")
+            time.sleep(0.2)
             
         except Exception as e:
             print(f"  ❌ 페이지 {page}: {e}")
@@ -120,19 +180,13 @@ def fetch_new_products(supabase, category_id, category_name, max_gdIdx):
     return new_products
 
 def remove_duplicates(products):
-    """external_id 기준 중복 제거"""
     unique = {}
     for p in products:
-        if p['external_id'] not in unique:
-            unique[p['external_id']] = p
-    
-    result = list(unique.values())
-    if len(products) != len(result):
-        print(f"  중복 제거: {len(products)} → {len(result)}개")
-    return result
+        key = f"{p['brand_id']}_{p['external_id']}"
+        unique[key] = p
+    return list(unique.values())
 
 def chunk(lst, size):
-    """청크 나누기"""
     for i in range(0, len(lst), size):
         yield lst[i:i+size]
 
@@ -141,72 +195,61 @@ def main():
         raise RuntimeError("환경변수 없음")
 
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-    
     total_saved = 0
     
-    # 각 카테고리별 크롤링
-    for cat in CATEGORIES:
-        cat_id = cat["id"]
-        cat_name = cat["name"]
+    # ✅ 모든 브랜드 순차 처리
+    for brand_name, brand_info in BRANDS.items():
+        print(f"\n{'='*70}")
+        print(f"🚀 {brand_name} 크롤링 시작!")
+        print(f"{'='*70}")
         
-        print(f"\n{'='*60}")
-        print(f"📦 카테고리: {cat_name} (ID: {cat_id})")
-        print(f"{'='*60}")
+        brand_saved = 0
         
-        # 1. 최대 external_id 조회 (NULL 제외)
-        try:
-            last_item = supabase.table("new_products") \
-                .select("external_id") \
-                .eq("brand_id", 1) \
-                .eq("category", cat_name) \
-                .not_.is_("external_id", None) \
-                .order("external_id", desc=True) \
-                .limit(1) \
-                .execute()
+        for cat in brand_info["categories"]:
+            cat_id = cat["id"]
+            cat_name = cat["name"]
             
-            max_gdIdx = last_item.data[0]['external_id'] if last_item.data else 0
-            print(f"📊 현재 DB 마지막 상품 번호: {max_gdIdx}")
+            print(f"\n📦 [{brand_name}] {cat_name} (ID: {cat_id})")
             
-        except Exception as e:
-            print(f"DB 조회 에러: {e}")
-            max_gdIdx = 0
+            # 최대 external_id 조회
+            try:
+                last_item = supabase.table("new_products") \
+                    .select("external_id") \
+                    .eq("brand_id", brand_info["id"]) \
+                    .eq("category", cat_name) \
+                    .not_.is_("external_id", None) \
+                    .order("external_id", desc=True) \
+                    .limit(1) \
+                    .execute()
+                
+                max_id = last_item.data[0]['external_id'] if last_item.data else 0
+            except:
+                max_id = 0
 
-        # 2. 신상품 크롤링
-        raw_products = fetch_new_products(supabase, cat_id, cat_name, max_gdIdx)
-
-        if not raw_products:
-            print(f"✨ {cat_name}에 새로운 상품이 없습니다.")
-            continue
-
-        # 3. 중복 제거
-        unique_products = remove_duplicates(raw_products)
-
-        # 4. 저장
-        if unique_products:
-            print(f"\n💾 {len(unique_products)}개 저장 중...")
+            # 신상품 크롤링
+            raw_products = fetch_new_products(supabase, brand_info, cat_id, cat_name, max_id)
             
-            saved_count = 0
-            for chunk_list in chunk(unique_products, CHUNK_SIZE):
-                try:
-                    supabase.table("new_products").insert(chunk_list).execute()
-                    saved_count += len(chunk_list)
-                    print(f"  {saved_count}/{len(unique_products)} 저장 완료")
-                except Exception as e:
-                    print(f"  저장 실패: {e}")
-                    break
-            
-            print(f"🎉 {cat_name} 저장 완료: {saved_count}개")
-            if unique_products:
-                print(f"   - 최신 1위: {unique_products[-1]['title']}")
-                print(f"   - 최신 2위: {unique_products[-2]['title'] if len(unique_products)>1 else '없음'}")
-            
-            total_saved += saved_count
+            if raw_products:
+                unique_products = remove_duplicates(raw_products)
+                saved_count = 0
+                
+                for chunk_list in chunk(unique_products, CHUNK_SIZE):
+                    try:
+                        supabase.table("new_products").insert(chunk_list).execute()
+                        saved_count += len(chunk_list)
+                    except Exception as e:
+                        print(f"저장 실패: {e}")
+                        break
+                
+                print(f"💾 [{brand_name} {cat_name}] {saved_count}개 저장!")
+                brand_saved += saved_count
+                total_saved += saved_count
+        
+        print(f"✅ {brand_name} 완료: {brand_saved}개")
     
-    print(f"\n{'='*60}")
-    print(f"🎉 전체 크롤링 완료! 총 {total_saved}개 저장됨")
-    print(f"{'='*60}")
+    print(f"\n{'='*70}")
+    print(f"🎉 전체 완료! CU+GS25 총 {total_saved}개 신상품 저장")
+    print(f"{'='*70}")
 
 if __name__ == "__main__":
     main()
-
-
