@@ -1,9 +1,14 @@
-import requests
-from bs4 import BeautifulSoup
-from datetime import datetime, timedelta
-import re
 import os
-import json
+import re
+import time
+from datetime import datetime, timedelta
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from bs4 import BeautifulSoup
 
 try:
     from supabase import create_client, Client
@@ -26,120 +31,127 @@ class CUCrawler:
                 supabase_key=supabase_key
             )
         
-        self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': 'text/html,application/xhtml+xml',
-            'Accept-Language': 'ko-KR,ko;q=0.9',
-        }
         self.brand_id = 1
+    
+    def setup_driver(self):
+        """Selenium 크롬 드라이버 설정"""
+        chrome_options = Options()
+        chrome_options.add_argument('--headless')
+        chrome_options.add_argument('--no-sandbox')
+        chrome_options.add_argument('--disable-dev-shm-usage')
+        chrome_options.add_argument('--disable-gpu')
+        chrome_options.add_argument('--window-size=1920,1080')
+        chrome_options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
+        
+        driver = webdriver.Chrome(options=chrome_options)
+        return driver
     
     def crawl(self):
         print("🏪 CU 크롤링 시작...")
+        driver = None
         
-        # CU 행사상품 페이지 (실제 제품이 있는 페이지)
-        urls = [
-            "https://cu.bgfretail.com/event/plusAjax.do?page=1&pageSize=20&evtId=",
-            "https://cu.bgfretail.com/product/pb.do",
-        ]
-        
-        all_products = []
-        
-        # 방법 1: PB상품 페이지 크롤링
         try:
+            driver = self.setup_driver()
             url = "https://cu.bgfretail.com/product/pb.do"
+            
             print(f"\n🔍 접속: {url}")
+            driver.get(url)
             
-            response = requests.get(url, headers=self.headers, timeout=30)
-            response.raise_for_status()
-            soup = BeautifulSoup(response.content, 'html.parser')
+            # 페이지 로딩 대기
+            time.sleep(3)
             
-            # 실제 제품 목록 찾기
-            products = soup.select('ul.prod_list li')
-            print(f"📦 발견: {len(products)}개")
+            # 제품 목록이 로드될 때까지 대기
+            try:
+                WebDriverWait(driver, 10).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "ul.prod_list li, .prodListWrap li"))
+                )
+            except:
+                print("⚠️ 제품 목록 로딩 타임아웃")
             
-            if products and len(products) > 3:  # 3개 이상이면 실제 제품
-                for idx, item in enumerate(products[:20]):
-                    try:
-                        # 제품명
-                        name_elem = item.select_one('.prod_name, .prodName, strong')
-                        if not name_elem:
-                            continue
-                        title = name_elem.text.strip()
-                        
-                        if not title or len(title) < 3:
-                            continue
-                        
-                        # 가격
-                        price = None
-                        price_elem = item.select_one('.price, .prodPrice, dd')
-                        if price_elem:
-                            price_text = price_elem.text.strip()
-                            numbers = re.findall(r'\d+', price_text.replace(',', ''))
-                            if numbers:
-                                price = int(''.join(numbers))
-                        
-                        # 이미지
-                        img = item.select_one('img')
-                        image_url = None
-                        if img:
-                            image_url = img.get('src') or img.get('data-src')
-                            if image_url:
-                                if image_url.startswith('//'):
-                                    image_url = 'https:' + image_url
-                                elif not image_url.startswith('http'):
-                                    image_url = 'https://cu.bgfretail.com' + image_url
-                        
-                        product = {
-                            'brand_id': self.brand_id,
-                            'title': title,
-                            'normalized_title': self.normalize_title(title),
-                            'price': price,
-                            'category': self.categorize(title),
-                            'launch_date': datetime.now().date().isoformat(),
-                            'image_url': image_url,
-                            'source_url': url,
-                            'is_active': True
-                        }
-                        
-                        all_products.append(product)
-                        print(f"  ✓ {idx+1}. {title[:40]}")
-                        
-                    except Exception as e:
-                        print(f"  ✗ 파싱 오류: {e}")
-        
+            # HTML 파싱
+            soup = BeautifulSoup(driver.page_source, 'html.parser')
+            
+            # 제품 찾기
+            products_html = soup.select('ul.prod_list > li')
+            if not products_html:
+                products_html = soup.select('.prodListWrap li')
+            if not products_html:
+                products_html = soup.select('li[class*="prod"]')
+            
+            print(f"📦 발견: {len(products_html)}개")
+            
+            products = []
+            
+            for idx, item in enumerate(products_html[:20]):
+                try:
+                    # 제품명
+                    name_elem = item.select_one('.prodName, .prod_name, strong, h3')
+                    if not name_elem:
+                        continue
+                    
+                    title = name_elem.text.strip()
+                    if not title or len(title) < 3 or '원' in title[:5]:
+                        continue
+                    
+                    # 가격
+                    price = None
+                    price_elem = item.select_one('.price, .prodPrice, dd')
+                    if price_elem:
+                        price_text = price_elem.text.strip()
+                        numbers = re.findall(r'\d+', price_text.replace(',', ''))
+                        if numbers:
+                            price = int(''.join(numbers))
+                    
+                    # 이미지
+                    img = item.select_one('img')
+                    image_url = None
+                    if img:
+                        image_url = img.get('src') or img.get('data-src')
+                        if image_url:
+                            if image_url.startswith('//'):
+                                image_url = 'https:' + image_url
+                            elif not image_url.startswith('http'):
+                                image_url = 'https://cu.bgfretail.com' + image_url
+                    
+                    # 링크
+                    link = item.select_one('a')
+                    source_url = url
+                    if link and link.get('href'):
+                        href = link.get('href')
+                        if href.startswith('http'):
+                            source_url = href
+                        elif href.startswith('/'):
+                            source_url = 'https://cu.bgfretail.com' + href
+                    
+                    product = {
+                        'brand_id': self.brand_id,
+                        'title': title,
+                        'normalized_title': self.normalize_title(title),
+                        'price': price,
+                        'category': self.categorize(title),
+                        'launch_date': datetime.now().date().isoformat(),
+                        'image_url': image_url,
+                        'source_url': source_url,
+                        'is_active': True
+                    }
+                    
+                    products.append(product)
+                    print(f"  ✓ {idx+1}. {title[:40]}")
+                    
+                except Exception as e:
+                    print(f"  ✗ 파싱 오류: {e}")
+            
+            return products
+            
         except Exception as e:
             print(f"❌ 크롤링 실패: {e}")
-        
-        # 제품이 없으면 더미 데이터 생성 (테스트용)
-        if len(all_products) == 0:
-            print("\n⚠️  실제 제품을 찾지 못해 테스트 데이터 생성...")
-            all_products = [
-                {
-                    'brand_id': self.brand_id,
-                    'title': 'CU 테스트 도시락',
-                    'normalized_title': self.normalize_title('CU 테스트 도시락'),
-                    'price': 4500,
-                    'category': '즉석식품',
-                    'launch_date': datetime.now().date().isoformat(),
-                    'image_url': None,
-                    'source_url': 'https://cu.bgfretail.com',
-                    'is_active': True
-                },
-                {
-                    'brand_id': self.brand_id,
-                    'title': 'CU 테스트 커피',
-                    'normalized_title': self.normalize_title('CU 테스트 커피'),
-                    'price': 1500,
-                    'category': '음료',
-                    'launch_date': datetime.now().date().isoformat(),
-                    'image_url': None,
-                    'source_url': 'https://cu.bgfretail.com',
-                    'is_active': True
-                }
-            ]
-            print(f"✓ 테스트 데이터 {len(all_products)}개 생성")
-        
-        return all_products
+            import traceback
+            traceback.print_exc()
+            return []
+            
+        finally:
+            if driver:
+                driver.quit()
     
     def normalize_title(self, title):
         normalized = re.sub(r'\s+', ' ', title)
@@ -168,15 +180,6 @@ class CUCrawler:
         print(f"\n💾 DB 저장 시작... ({len(products)}개)")
         
         try:
-            # 테이블 존재 확인
-            try:
-                test = self.supabase.table('new_products').select('id').limit(1).execute()
-                print("✓ 테이블 연결 성공")
-            except Exception as e:
-                print(f"❌ 테이블 없음: {e}")
-                print("👉 Supabase에서 테이블을 먼저 생성하세요!")
-                return 0
-            
             # 중복 체크
             thirty_days_ago = (datetime.now() - timedelta(days=30)).date().isoformat()
             existing = self.supabase.table('new_products')\
@@ -196,13 +199,13 @@ class CUCrawler:
             ]
             
             if new_products:
-                result = self.supabase.table('new_products').insert(new_products).execute()
+                self.supabase.table('new_products').insert(new_products).execute()
                 print(f"✅ {len(new_products)}개 저장 완료!")
-                for p in new_products[:3]:
+                for p in new_products[:5]:
                     print(f"  - {p['title'][:40]}")
                 return len(new_products)
             else:
-                print("ℹ️  모두 기존 제품 (신규 없음)")
+                print("ℹ️ 모두 기존 제품 (신규 없음)")
                 return 0
                 
         except Exception as e:
@@ -213,7 +216,7 @@ class CUCrawler:
 
 def main():
     print("="*60)
-    print("🏪 CU 신제품 크롤러")
+    print("🏪 CU 신제품 크롤러 (Selenium)")
     print(f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("="*60)
     
