@@ -1,23 +1,20 @@
-# ÆíÀÇÁ¡ ½ÅÁ¦Ç° Å©·Ñ·¯
+## ê¸°ëŠ¥
 
-ÆíÀÇÁ¡(CU, GS25, ¼¼ºìÀÏ·¹ºì, ÀÌ¸¶Æ®24) ½ÅÁ¦Ç° Á¤º¸¸¦ ÀÚµ¿À¸·Î ¼öÁıÇÏ¿© Supabase DB¿¡ ÀúÀåÇÕ´Ï´Ù.
+- ë§¤ì¼ ìƒˆë²½ 3ì‹œ ìë™ ì‹¤í–‰ (GitHub Actions)
+- ì¤‘ë³µ ì œí’ˆ ìë™ í•„í„°ë§
+- Supabase ë°ì´í„°ë² ì´ìŠ¤ ì—°ë™
 
-## ±â´É
+## í™˜ê²½ ë³€ìˆ˜ ì„¤ì •
 
-- ¸ÅÀÏ »õº® 3½Ã ÀÚµ¿ ½ÇÇà (GitHub Actions)
-- Áßº¹ Á¦Ç° ÀÚµ¿ ÇÊÅÍ¸µ
-- Supabase µ¥ÀÌÅÍº£ÀÌ½º ¿¬µ¿
+GitHub Repository â†’ Settings â†’ Secrets and variables â†’ Actions
 
-## È¯°æ º¯¼ö ¼³Á¤
-
-GitHub Repository ¡æ Settings ¡æ Secrets and variables ¡æ Actions
-
-´ÙÀ½ Secrets Ãß°¡:
-- `SUPABASE_URL`: Supabase ÇÁ·ÎÁ§Æ® URL
+ë‹¤ìŒ Secrets ì¶”ê°€:
+- `SUPABASE_URL`: Supabase í”„ë¡œì íŠ¸ URL
 - `SUPABASE_SERVICE_KEY`: Supabase Service Role Key
 
-## ¼öµ¿ ½ÇÇà ¹æ¹ı
+## ìˆ˜ë™ ì‹¤í–‰ ë°©ë²•
 
-1. GitHub Repository ¡æ Actions ÅÇ
-2. "Daily Convenience Crawler" ¼±ÅÃ
-3. "Run workflow" ¹öÆ° Å¬¸¯
+1. GitHub Repository â†’ Actions íƒ­
+2. "Daily Convenience Crawler" ì„ íƒ
+3. "Run workflow" ë²„íŠ¼ í´ë¦­
+
