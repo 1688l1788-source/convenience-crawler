@@ -3,6 +3,7 @@ from bs4 import BeautifulSoup
 from supabase import create_client
 import os
 import time
+import re  # ✅ 추가
 
 # --- 설정 ---
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
@@ -111,35 +112,44 @@ def main():
                         badge_tag = item.select_one(".badge")
                         promotion_type = badge_tag.text.strip() if badge_tag else None
                         
-                        # ✅ 실제 상품 카테고리 (카테고리 코드에 따라 자동 매핑)
                         category_map = {
                             '40': '아이스크림',
                             '50': '과자',
                             '60': '음료',
-                            # 추가 카테고리는 여기에 추가
                         }
                         category_name = category_map.get(cat_code, '기타')
 
-                        # 5. 상품 상세 링크
+                        # 5. ✅ 상품 상세 링크 (gdIdx 추출하여 view.do URL 생성)
+                        product_url = "https://cu.bgfretail.com/product/view.do?category=product"
                         detail_link = item.select_one("a")
-                        product_url = "https://cu.bgfretail.com/product/product.do"
-                        if detail_link and detail_link.get('href'):
-                            href = detail_link['href']
-                            if href.startswith('http'):
-                                product_url = href
-                            elif href.startswith('/'):
-                                product_url = f"https://cu.bgfretail.com{href}"
-                            elif '?' in href or 'product' in href:
-                                product_url = f"https://cu.bgfretail.com/product/{href}"
+                        
+                        if detail_link:
+                            # onclick 속성에서 gdIdx 추출 시도
+                            onclick = detail_link.get('onclick', '')
+                            if onclick:
+                                # onclick="goDetail('26285')" 형태에서 숫자 추출
+                                match = re.search(r"goDetail\s*\(\s*['\"]?(\d+)['\"]?\s*\)", onclick)
+                                if match:
+                                    gdIdx = match.group(1)
+                                    product_url = f"https://cu.bgfretail.com/product/view.do?gdIdx={gdIdx}&category=product"
+                            
+                            # href 속성에서 추출 시도
+                            href = detail_link.get('href', '')
+                            if href and 'gdIdx=' in href:
+                                if href.startswith('http'):
+                                    product_url = href
+                                elif href.startswith('/'):
+                                    product_url = f"https://cu.bgfretail.com{href}"
+                                else:
+                                    product_url = f"https://cu.bgfretail.com/product/{href}"
 
-                        # ✅ category는 상품 분류, promotion_type은 행사 정보
                         product = {
                             "title": title,
                             "price": price,
                             "image_url": image_url,
-                            "category": category_name,  # 아이스크림, 과자, 음료 등
-                            "promotion_type": promotion_type,  # 1+1, 2+1, 덤증정 등 (없으면 None)
-                            "source_url": product_url,
+                            "category": category_name,
+                            "promotion_type": promotion_type,
+                            "source_url": product_url,  # ✅ view.do URL
                             "is_active": True,
                             "brand_id": 1
                         }
