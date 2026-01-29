@@ -100,9 +100,6 @@ def main():
                                     image_url = f"https://cu.bgfretail.com{image_url}"
                                 elif not image_url.startswith('http'):
                                     image_url = f"https://cu.bgfretail.com/{image_url}"
-                        
-                        if not image_url:
-                            print(f"    ⚠️ 이미지 없음: {title}")
 
                         # 4. 행사 정보
                         badge_tag = item.select_one(".badge")
@@ -129,7 +126,7 @@ def main():
             except Exception as e:
                 print(f"❌ 페이지 요청 에러: {e}")
 
-    # 3. 데이터 뒤집기
+    # 3. 데이터 뒤집기 (최신순 정렬)
     print(f"\n🔄 데이터 정렬 중... (총 {len(all_products)}개)")
     all_products.reverse()
 
