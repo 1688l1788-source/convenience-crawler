@@ -41,10 +41,15 @@ def main():
                 "pageIndex": page,
                 "searchMainCategory": cat_code,
                 "searchSubCategory": "",
-                "listType": 1,
-                "searchCondition": "regist_date",  # 최신순 정렬 파라미터 추가
+                "listType": 0,  # 최신순 (0)
+                "searchCondition": "setC",  # 최신순 조건
                 "searchUseYn": "N",
                 "codeParent": cat_code,
+                "gdIdx": "",
+                "user_id": "",
+                "search1": "",
+                "search2": "",
+                "searchKeyword": ""
             }
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -67,6 +72,12 @@ def main():
                     break
 
                 print(f"    ✅ {len(items)}개 제품 발견")
+                
+                # 첫 번째 제품 로그 (디버깅)
+                if page == 1 and items:
+                    first_title = items[0].select_one(".name p")
+                    if first_title:
+                        print(f"    🔝 첫 제품: {first_title.text.strip()}")
 
                 for item in items:
                     try:
@@ -138,7 +149,7 @@ def main():
             except Exception as e:
                 print(f"❌ 페이지 요청 에러: {e}")
 
-    # 3. DB 저장 (역순 정렬 제거 - API가 이미 최신순으로 반환)
+    # 3. DB 저장 (역순 정렬 안 함 - API가 이미 최신순)
     print(f"\n💾 Supabase에 저장 중... (총 {len(all_products)}개)")
     count = 0
     for product in all_products:
