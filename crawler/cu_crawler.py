@@ -3,7 +3,7 @@ from bs4 import BeautifulSoup
 from supabase import create_client
 import os
 import time
-import re  # ✅ 추가
+import re
 
 # --- 설정 ---
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
@@ -12,8 +12,68 @@ SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY")
 TARGET_CATEGORIES = ['40']  # 아이스크림/스낵
 MAX_PAGES = 5
 
+
+def debug_html():
+    """CU 웹사이트 HTML 구조 확인용"""
+    url = "https://cu.bgfretail.com/product/productAjax.do"
+    payload = {
+        "pageIndex": 1,
+        "searchMainCategory": "40",
+        "searchSubCategory": "",
+        "listType": 0,
+        "searchCondition": "setC",
+        "searchUseYn": "N",
+        "codeParent": "40"
+    }
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+    }
+    
+    print("\n" + "="*80)
+    print("🔍 HTML 구조 디버깅")
+    print("="*80 + "\n")
+    
+    response = requests.post(url, data=payload, headers=headers, timeout=10)
+    response.encoding = 'utf-8'
+    soup = BeautifulSoup(response.text, 'html.parser')
+    items = soup.select("li.prod_list")
+    
+    if items:
+        first = items[0]
+        
+        # 제품명 출력
+        name_tag = first.select_one(".name p")
+        if name_tag:
+            print(f"제품명: {name_tag.text.strip()}\n")
+        
+        # HTML 일부 출력
+        print("HTML 구조 (처음 2000자):")
+        print("-"*80)
+        print(first.prettify()[:2000])
+        print("-"*80 + "\n")
+        
+        # 링크 분석
+        links = first.select("a")
+        print("링크 정보:")
+        for i, link in enumerate(links, 1):
+            print(f"\n  [링크 #{i}]")
+            print(f"    href    : {link.get('href')}")
+            print(f"    onclick : {link.get('onclick')}")
+            
+            # data 속성 확인
+            for attr in link.attrs:
+                if attr.startswith('data-'):
+                    print(f"    {attr}: {link.get(attr)}")
+        
+        print("\n" + "="*80 + "\n")
+
+
 def main():
     print("🚀 CU 크롤러 시작 (API 모드)")
+    
+    # 디버깅 실행
+    debug_html()
 
     if not SUPABASE_URL or not SUPABASE_KEY:
         print("❌ 에러: Supabase 환경 변수가 없습니다.")
@@ -119,7 +179,7 @@ def main():
                         }
                         category_name = category_map.get(cat_code, '기타')
 
-                        # 5. ✅ 상품 상세 링크 (gdIdx 추출하여 view.do URL 생성)
+                        # 5. 상품 상세 링크 (gdIdx 추출하여 view.do URL 생성)
                         product_url = "https://cu.bgfretail.com/product/view.do?category=product"
                         detail_link = item.select_one("a")
                         
@@ -149,7 +209,7 @@ def main():
                             "image_url": image_url,
                             "category": category_name,
                             "promotion_type": promotion_type,
-                            "source_url": product_url,  # ✅ view.do URL
+                            "source_url": product_url,
                             "is_active": True,
                             "brand_id": 1
                         }
