@@ -33,19 +33,16 @@ class CUCrawler:
         self.brand_id = 1
         self.base_url = "https://cu.bgfretail.com"
         
-        # 카테고리 URL 매핑 (depth3 = 1~7)
+        # 카테고리 URL 매핑
         self.category_urls = [
-            "https://cu.bgfretail.com/product/product.do?category=product&depth2=4&depth3=1",  # 간편식사
-            "https://cu.bgfretail.com/product/product.do?category=product&depth2=4&depth3=2",  # 과자류
-            "https://cu.bgfretail.com/product/product.do?category=product&depth2=4&depth3=3",  # 아이스크림
-            "https://cu.bgfretail.com/product/product.do?category=product&depth2=4&depth3=4",  # 식품
-            "https://cu.bgfretail.com/product/product.do?category=product&depth2=4&depth3=5",  # 음료
-            "https://cu.bgfretail.com/product/product.do?category=product&depth2=4&depth3=6",  # 생활용품
-            "https://cu.bgfretail.com/product/product.do?category=product&depth2=4&depth3=7",  # 건강/위생용품
+            ("https://cu.bgfretail.com/product/product.do?category=product&depth2=4&depth3=1", "간편식사"),
+            ("https://cu.bgfretail.com/product/product.do?category=product&depth2=4&depth3=2", "과자류"),
+            ("https://cu.bgfretail.com/product/product.do?category=product&depth2=4&depth3=3", "아이스크림"),
+            ("https://cu.bgfretail.com/product/product.do?category=product&depth2=4&depth3=4", "식품"),
+            ("https://cu.bgfretail.com/product/product.do?category=product&depth2=4&depth3=5", "음료"),
         ]
     
     def setup_driver(self):
-        """Selenium 크롬 드라이버 설정"""
         chrome_options = Options()
         chrome_options.add_argument('--headless')
         chrome_options.add_argument('--no-sandbox')
@@ -57,133 +54,112 @@ class CUCrawler:
         driver = webdriver.Chrome(options=chrome_options)
         return driver
     
-    def extract_product_details(self, driver, product_url):
-        """개별 제품 상세 페이지에서 정보 추출"""
-        try:
-            driver.get(product_url)
-            time.sleep(2)
-            
-            soup = BeautifulSoup(driver.page_source, 'html.parser')
-            
-            # 제품명
-            title = None
-            title_elem = soup.select_one('.prodTitle, .prod_title, h3, .name')
-            if title_elem:
-                title = title_elem.text.strip()
-            
-            # 가격
-            price = None
-            price_elem = soup.select_one('.prodPrice, .price, .cost, .val')
-            if price_elem:
-                price_text = price_elem.text.strip()
-                numbers = re.findall(r'\d+', price_text.replace(',', ''))
-                if numbers:
-                    price = int(''.join(numbers))
-            
-            # 이미지
-            image_url = None
-            img = soup.select_one('.prodImg img, .prod_img img, .detail_img img')
-            if img:
-                image_url = img.get('src') or img.get('data-src')
-                if image_url:
-                    if image_url.startswith('//'):
-                        image_url = 'https:' + image_url
-                    elif not image_url.startswith('http'):
-                        image_url = self.base_url + image_url
-            
-            return {
-                'title': title,
-                'price': price,
-                'image_url': image_url,
-                'source_url': product_url
-            }
-            
-        except Exception as e:
-            print(f"  ⚠️ 상세 페이지 크롤링 실패: {e}")
-            return None
-    
     def crawl_category(self, driver, category_url, category_name):
-        """카테고리별 신제품 크롤링"""
         print(f"\n📂 {category_name} 크롤링 중...")
         products = []
         
         try:
             driver.get(category_url)
-            time.sleep(3)
+            time.sleep(5)  # 페이지 로딩 대기 증가
             
-            # 제품 목록 대기
-            try:
-                WebDriverWait(driver, 10).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, "ul.prodListWrap li, .prod_list li"))
-                )
-            except:
-                print(f"  ⚠️ {category_name} 제품 목록 로딩 실패")
-                return []
+            # 페이지 HTML 출력 (디버깅용)
+            print(f"  🔍 페이지 소스 길이: {len(driver.page_source)}")
             
             soup = BeautifulSoup(driver.page_source, 'html.parser')
             
-            # 제품 찾기
-            product_items = soup.select('ul.prodListWrap > li, .prod_list > li')
-            print(f"  📦 발견: {len(product_items)}개")
+            # 다양한 선택자 시도
+            selectors = [
+                'ul.prodListWrap > li',
+                '.prod_list > li',
+                'div.prod_list li',
+                'li.prod_item',
+                '.prodList li',
+                'div[class*="prod"] li'
+            ]
             
-            # 상위 20개만 처리
-            for idx, item in enumerate(product_items[:20]):
+            product_items = []
+            for selector in selectors:
+                product_items = soup.select(selector)
+                if product_items:
+                    print(f"  ✅ 선택자 '{selector}' 로 {len(product_items)}개 발견")
+                    break
+            
+            if not product_items:
+                print(f"  ❌ 제품 목록을 찾을 수 없습니다")
+                # HTML 일부 출력
+                print(f"  📄 HTML 샘플: {str(soup)[:500]}")
+                return []
+            
+            # 상위 10개만 처리 (테스트용)
+            for idx, item in enumerate(product_items[:10]):
                 try:
-                    # 제품 링크 추출
-                    link = item.select_one('a')
+                    # 링크 찾기
+                    link = item.find('a')
                     if not link or not link.get('href'):
                         continue
                     
                     href = link.get('href')
                     
-                    # 절대 URL 생성
+                    # 제품명 찾기 (다양한 방법)
+                    title = None
+                    if link.get('title'):
+                        title = link.get('title').strip()
+                    elif item.find(string=True):
+                        title = item.get_text().strip()[:50]
+                    
+                    if not title or len(title) < 3:
+                        continue
+                    
+                    # 가격 찾기 (숫자만)
+                    price = None
+                    price_text = item.get_text()
+                    numbers = re.findall(r'\d+', price_text.replace(',', ''))
+                    if numbers:
+                        # 가장 큰 숫자를 가격으로 (보통 가격이 가장 큼)
+                        price = max(int(n) for n in numbers if len(n) <= 6)
+                    
+                    # 이미지 URL
+                    image_url = None
+                    img = item.find('img')
+                    if img:
+                        image_url = img.get('src') or img.get('data-src')
+                        if image_url and not image_url.startswith('http'):
+                            image_url = self.base_url + image_url
+                    
+                    # 상세 URL
                     if href.startswith('http'):
-                        product_url = href
+                        source_url = href
                     elif href.startswith('/'):
-                        product_url = self.base_url + href
+                        source_url = self.base_url + href
                     else:
-                        product_url = self.base_url + '/' + href
+                        source_url = self.base_url + '/' + href
                     
-                    # gdIdx 확인 (실제 제품 상세 페이지인지 확인)
-                    if 'gdIdx=' not in product_url:
-                        continue
-                    
-                    # 상세 페이지에서 정보 추출
-                    details = self.extract_product_details(driver, product_url)
-                    
-                    if not details or not details['title']:
-                        continue
-                    
-                    # 제품 정보 구성
                     product = {
                         'brand_id': self.brand_id,
-                        'title': details['title'],
-                        'normalized_title': self.normalize_title(details['title']),
-                        'price': details['price'],
-                        'category': self.categorize(details['title']),
+                        'title': title,
+                        'normalized_title': self.normalize_title(title),
+                        'price': price,
+                        'category': category_name,
                         'launch_date': datetime.now().date().isoformat(),
-                        'image_url': details['image_url'],
-                        'source_url': details['source_url'],
+                        'image_url': image_url,
+                        'source_url': source_url,
                         'is_active': True
                     }
                     
                     products.append(product)
-                    print(f"    ✓ {idx+1}. {product['title'][:40]}")
-                    
-                    # 과도한 요청 방지
-                    time.sleep(1)
+                    print(f"    ✓ {idx+1}. {title[:30]} ({price}원)")
                     
                 except Exception as e:
-                    print(f"    ✗ {idx+1}번 제품 파싱 오류: {e}")
-                    continue
+                    print(f"    ✗ {idx+1}번 파싱 오류: {e}")
             
         except Exception as e:
             print(f"  ❌ {category_name} 크롤링 실패: {e}")
+            import traceback
+            traceback.print_exc()
         
         return products
     
     def crawl(self):
-        """전체 카테고리 크롤링"""
         print("🏪 CU 신제품 크롤링 시작...")
         driver = None
         all_products = []
@@ -191,23 +167,10 @@ class CUCrawler:
         try:
             driver = self.setup_driver()
             
-            category_names = [
-                "간편식사",
-                "과자류", 
-                "아이스크림",
-                "식품",
-                "음료",
-                "생활용품",
-                "건강/위생용품"
-            ]
-            
-            # 각 카테고리 크롤링
-            for url, name in zip(self.category_urls, category_names):
+            for url, name in self.category_urls:
                 products = self.crawl_category(driver, url, name)
                 all_products.extend(products)
-                
-                # 카테고리 간 대기
-                time.sleep(2)
+                time.sleep(3)
             
             print(f"\n✅ 총 {len(all_products)}개 제품 수집 완료")
             return all_products
@@ -223,29 +186,11 @@ class CUCrawler:
                 driver.quit()
     
     def normalize_title(self, title):
-        """제목 정규화"""
         normalized = re.sub(r'\s+', ' ', title)
         normalized = re.sub(r'[^\w\s가-힣]', '', normalized)
         return normalized.strip().upper()
     
-    def categorize(self, title):
-        """카테고리 자동 분류"""
-        title_lower = title.lower()
-        keywords = {
-            '음료': ['음료', '주스', '커피', '우유', '차', '워터', '사이다', '콜라', '라떼', '에이드'],
-            '과자': ['과자', '초콜릿', '사탕', '젤리', '쿠키', '비스킷', '스낵', '칩', '팝콘'],
-            '즉석식품': ['도시락', '김밥', '샌드위치', '삼각김밥', '핫도그', '햄버거', '컵밥', '덮밥'],
-            '라면': ['라면', '컵라면', '짜파게티', '짜장면', '우동'],
-            '아이스크림': ['아이스크림', '빙과', '아이스바', '콘', '빙수']
-        }
-        
-        for category, words in keywords.items():
-            if any(word in title_lower for word in words):
-                return category
-        return '기타'
-    
     def save_to_db(self, products):
-        """Supabase에 저장"""
         if not products:
             print("💤 저장할 제품 없음")
             return 0
@@ -253,7 +198,6 @@ class CUCrawler:
         print(f"\n💾 DB 저장 시작... ({len(products)}개)")
         
         try:
-            # 중복 체크 (최근 30일)
             thirty_days_ago = (datetime.now() - timedelta(days=30)).date().isoformat()
             existing = self.supabase.table('new_products')\
                 .select('normalized_title, launch_date')\
@@ -274,16 +218,9 @@ class CUCrawler:
             if new_products:
                 self.supabase.table('new_products').insert(new_products).execute()
                 print(f"✅ {len(new_products)}개 저장 완료!")
-                
-                # 카테고리별 통계
-                from collections import Counter
-                categories = Counter(p['category'] for p in new_products)
-                for cat, count in categories.items():
-                    print(f"  - {cat}: {count}개")
-                
                 return len(new_products)
             else:
-                print("ℹ️ 모두 기존 제품 (신규 없음)")
+                print("ℹ️ 모두 기존 제품")
                 return 0
                 
         except Exception as e:
