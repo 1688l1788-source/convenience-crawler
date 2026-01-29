@@ -84,18 +84,36 @@ class CUCrawler:
             
             for idx, item in enumerate(products_html[:20]):
                 try:
-                    # 제품명
-                    name_elem = item.select_one('.prodName, .prod_name, strong, h3')
-                    if not name_elem:
+                    # 제품명 - 개선된 추출 로직
+                    title = None
+                    
+                    # 1. 링크의 title 속성 우선 시도
+                    link = item.select_one('a')
+                    if link and link.get('title'):
+                        title = link.get('title').strip()
+                    
+                    # 2. 다양한 텍스트 요소 시도
+                    if not title:
+                        for selector in ['.prodName', '.prod_name', 'strong', 'h3', 'dt', '.name']:
+                            elem = item.select_one(selector)
+                            if elem:
+                                text = elem.text.strip()
+                                # 가격 형식이 아닌 경우에만 제품명으로 인정
+                                if text and len(text) > 3 and not re.match(r'^[\d,]+$', text) and '원' not in text[:5]:
+                                    title = text
+                                    break
+                    
+                    # 제품명 검증
+                    if not title or len(title) < 3:
                         continue
                     
-                    title = name_elem.text.strip()
-                    if not title or len(title) < 3 or '원' in title[:5]:
+                    # 가격만 있는 경우 스킵 (숫자와 쉼표만)
+                    if re.match(r'^[\d,원\s]+$', title):
                         continue
                     
                     # 가격
                     price = None
-                    price_elem = item.select_one('.price, .prodPrice, dd')
+                    price_elem = item.select_one('.price, .prodPrice, dd, .val')
                     if price_elem:
                         price_text = price_elem.text.strip()
                         numbers = re.findall(r'\d+', price_text.replace(',', ''))
@@ -106,15 +124,14 @@ class CUCrawler:
                     img = item.select_one('img')
                     image_url = None
                     if img:
-                        image_url = img.get('src') or img.get('data-src')
+                        image_url = img.get('src') or img.get('data-src') or img.get('data-original')
                         if image_url:
                             if image_url.startswith('//'):
                                 image_url = 'https:' + image_url
                             elif not image_url.startswith('http'):
                                 image_url = 'https://cu.bgfretail.com' + image_url
                     
-                    # 링크
-                    link = item.select_one('a')
+                    # 링크 URL
                     source_url = url
                     if link and link.get('href'):
                         href = link.get('href')
