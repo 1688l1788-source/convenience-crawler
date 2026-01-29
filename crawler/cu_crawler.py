@@ -38,34 +38,25 @@ def main():
             
             url = "https://cu.bgfretail.com/product/productAjax.do"
             payload = {
-                "pageIndex": str(page),
-                "searchMainCategory": str(cat_code),
+                "pageIndex": page,
+                "searchMainCategory": cat_code,
                 "searchSubCategory": "",
-                "listType": "0",
+                "listType": 0,
                 "searchCondition": "setC",
                 "searchUseYn": "N",
-                "codeParent": str(cat_code),
-                "gdIdx": "396",  # 최신순 클릭 시 값
-                "user_id": "",
-                "search1": "",
-                "search2": "",
-                "searchKeyword": ""
+                "codeParent": cat_code
             }
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                 "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-                "Referer": "https://cu.bgfretail.com/product/product.do",
-                "Origin": "https://cu.bgfretail.com"
             }
 
             try:
                 response = requests.post(url, data=payload, headers=headers, timeout=10)
                 response.encoding = 'utf-8'
                 
-                print(f"    ⚙️ 상태 코드: {response.status_code}")
-                
                 if response.status_code != 200:
-                    print(f"    📄 응답 내용: {response.text[:200]}")
+                    print(f"❌ 요청 실패: {response.status_code}")
                     continue
 
                 soup = BeautifulSoup(response.text, 'html.parser')
@@ -77,7 +68,7 @@ def main():
 
                 print(f"    ✅ {len(items)}개 제품 발견")
                 
-                # 첫 번째 제품 로그
+                # 첫 제품 확인
                 if page == 1 and items:
                     first_title = items[0].select_one(".name p")
                     if first_title:
@@ -153,9 +144,13 @@ def main():
             except Exception as e:
                 print(f"❌ 페이지 요청 에러: {e}")
 
-    # 3. DB 저장
+    # 3. DB 저장 (역순 안 함)
     print(f"\n💾 Supabase에 저장 중... (총 {len(all_products)}개)")
     count = 0
+    
+    if all_products:
+        print(f"  🔝 첫 저장: {all_products[0]['title']}")
+    
     for product in all_products:
         try:
             supabase.table("new_products").insert(product).execute()
