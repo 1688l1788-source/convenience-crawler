@@ -92,7 +92,7 @@ def main():
 
     for p_type in promo_types:
         print(f"🔎 행사 유형: {p_type} 조회 중...")
-        for page in range(1, 11): # 최대 10페이지까지
+        for page in range(1, 11):
             payload = {
                 "CSRFToken": csrf_token,
                 "pageNum": str(page),
@@ -104,21 +104,30 @@ def main():
             
             try:
                 r = session.post(url, data=payload, timeout=10)
-                # 응답에서 JSON 데이터만 추출 (앞뒤 공백 제거 및 매칭)
+                
+                # ✅ 이 부분이 핵심입니다: 인코딩을 utf-8로 강제 설정
+                r.encoding = 'utf-8' 
+                
+                # 응답에서 JSON 데이터 추출
                 data_match = re.search(r'(\{.*\})', r.text, re.DOTALL)
                 
                 if data_match:
-                    data = json.loads(data_match.group(1))
+                    # 텍스트를 JSON으로 로드하기 전에 다시 한번 확인
+                    json_str = data_match.group(1)
+                    data = json.loads(json_str)
                     items = data.get("results", [])
                     
-                    if not items: break # 더 이상 데이터 없으면 중단
+                    if not items: break
                     
                     for item in items:
                         p = parse_gs25_promotion(item, p_type)
-                        if p: all_promotions.append(p)
+                        if p: 
+                            # 혹시 모를 유니코드 깨짐 방지 처리
+                            p['title'] = p['title'].encode('utf-8').decode('utf-8')
+                            all_promotions.append(p)
                     
                     print(f"   - {page}페이지 완료 ({len(items)}개)")
-                    time.sleep(0.5) # 서버 부하 방지
+                    time.sleep(0.5)
                 else:
                     break
             except Exception as e:
@@ -139,3 +148,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
