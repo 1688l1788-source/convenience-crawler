@@ -9,23 +9,12 @@ import re
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY")
 
-# ✅ depth2, depth3로 카테고리 매핑
-TARGET_CATEGORIES = {
-    '간편식사': {'depth2': '4', 'depth3': '1'},
-    '즉석조리': {'depth2': '4', 'depth3': '2'},
-    '과자': {'depth2': '4', 'depth3': '3'},
-    '아이스크림': {'depth2': '4', 'depth3': '4'},
-    '식품': {'depth2': '4', 'depth3': '5'},
-    '음료': {'depth2': '4', 'depth3': '6'},
-    '생활용품': {'depth2': '4', 'depth3': '7'},
-}
+MAX_PAGES = 10
+MAX_PRODUCTS = 200
 
-MAX_PAGES = 5
-MAX_PRODUCTS = 100
-
-def crawl_general_products(cat_name, depth2, depth3):
-    """일반 상품 크롤링 (depth2, depth3)"""
-    print(f"  🛒 일반 {cat_name} 크롤링 중...")
+def crawl_general_icecream():
+    """일반 아이스크림 크롤링"""
+    print("🛒 일반 아이스크림 크롤링 중...")
     products = []
     
     for page in range(1, MAX_PAGES + 1):
@@ -35,8 +24,8 @@ def crawl_general_products(cat_name, depth2, depth3):
         url = "https://cu.bgfretail.com/product/productAjax.do"
         payload = {
             "pageIndex": page,
-            "depth2": depth2,
-            "depth3": depth3,
+            "depth2": "4",
+            "depth3": "4",
             "listType": 0,
         }
         headers = {
@@ -51,26 +40,29 @@ def crawl_general_products(cat_name, depth2, depth3):
             items = soup.select("li.prod_list")
 
             if not items:
+                print(f"  페이지 {page}: 데이터 없음, 종료")
                 break
+
+            print(f"  페이지 {page}: {len(items)}개 발견")
 
             for item in items:
                 if len(products) >= MAX_PRODUCTS: break
-                product = parse_product(item, cat_name)
+                product = parse_product(item, "아이스크림")
                 if product:
                     products.append(product)
             
             time.sleep(0.5)
 
         except Exception as e:
-            print(f"    ❌ 요청 에러: {e}")
+            print(f"  ❌ 페이지 {page} 요청 에러: {e}")
     
-    print(f"    ✅ 일반 {len(products)}개 발견")
+    print(f"✅ 일반 아이스크림 {len(products)}개 크롤링 완료\n")
     return products
 
 
-def crawl_pb_products(cat_name, depth2, depth3):
-    """PB 상품 크롤링 (depth2, depth3)"""
-    print(f"  🏪 PB {cat_name} 크롤링 중...")
+def crawl_pb_icecream():
+    """PB 아이스크림 크롤링 (depth 파라미터 테스트)"""
+    print("🏪 PB 아이스크림 크롤링 중...")
     products = []
     
     for page in range(1, MAX_PAGES + 1):
@@ -80,8 +72,8 @@ def crawl_pb_products(cat_name, depth2, depth3):
         url = "https://cu.bgfretail.com/product/pbAjax.do"
         payload = {
             "pageIndex": page,
-            "depth2": depth2,
-            "depth3": depth3,
+            "depth2": "4",
+            "depth3": "4",
             "listType": 0,
             "searchCondition": "setA",
             "searchUseYn": "",
@@ -103,20 +95,31 @@ def crawl_pb_products(cat_name, depth2, depth3):
             items = soup.select("li.prod_list")
 
             if not items:
+                print(f"  페이지 {page}: 데이터 없음, 종료")
                 break
+
+            print(f"  페이지 {page}: {len(items)}개 발견")
+            
+            # ✅ 디버깅: 처음 3개 제품명 출력
+            if page == 1:
+                print(f"  📝 PB 샘플 (페이지 1, 처음 3개):")
+                for i, item in enumerate(items[:3], 1):
+                    name_tag = item.select_one(".name p")
+                    title = name_tag.text.strip() if name_tag else "Unknown"
+                    print(f"    {i}. {title}")
 
             for item in items:
                 if len(products) >= MAX_PRODUCTS: break
-                product = parse_product(item, cat_name)
+                product = parse_product(item, "아이스크림")
                 if product:
                     products.append(product)
             
             time.sleep(0.5)
 
         except Exception as e:
-            print(f"    ❌ PB 요청 에러: {e}")
+            print(f"  ❌ 페이지 {page} 요청 에러: {e}")
     
-    print(f"    ✅ PB {len(products)}개 발견")
+    print(f"✅ PB 아이스크림 {len(products)}개 크롤링 완료\n")
     return products
 
 
@@ -167,7 +170,7 @@ def parse_product(item, category_name):
 
 
 def main():
-    print("🚀 CU 크롤러 시작 (depth2/depth3 방식)")
+    print("🚀 CU 아이스크림 전용 크롤러 시작\n")
 
     if not SUPABASE_URL or not SUPABASE_KEY:
         print("❌ 에러: Supabase 환경 변수가 없습니다.")
@@ -175,44 +178,37 @@ def main():
 
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
     
-    total_count = 0
-
-    for cat_name, params in TARGET_CATEGORIES.items():
-        depth2 = params['depth2']
-        depth3 = params['depth3']
-        
-        print(f"\n📂 [{cat_name}] 처리 시작... (depth2={depth2}, depth3={depth3})")
-        
-        # 기존 데이터 삭제
+    # 기존 아이스크림 데이터 삭제
+    print("🗑️  기존 아이스크림 데이터 삭제 중...")
+    try:
+        supabase.table("new_products").delete().eq("category", "아이스크림").execute()
+        print("✅ 삭제 완료\n")
+    except Exception as e:
+        print(f"⚠️ 삭제 에러: {e}\n")
+    
+    # 1. 일반 아이스크림 크롤링
+    general_items = crawl_general_icecream()
+    
+    # 2. PB 아이스크림 크롤링
+    pb_items = crawl_pb_icecream()
+    
+    # 3. 합치기
+    all_items = general_items + pb_items
+    
+    print(f"💾 저장 시작... (일반 {len(general_items)} + PB {len(pb_items)} = 총 {len(all_items)}개)\n")
+    
+    # 4. 저장
+    saved_count = 0
+    for product in reversed(all_items):
+        if not product: continue
         try:
-            supabase.table("new_products").delete().eq("category", cat_name).execute()
-            print(f"  🗑️  기존 {cat_name} 데이터 삭제")
+            supabase.table("new_products").insert(product).execute()
+            saved_count += 1
         except Exception as e:
-            print(f"  ⚠️ 삭제 에러: {e}")
-        
-        # 일반 + PB 크롤링
-        general_items = crawl_general_products(cat_name, depth2, depth3)
-        pb_items = crawl_pb_products(cat_name, depth2, depth3)
-        
-        # 합치기
-        all_items = general_items + pb_items
-        
-        # 저장
-        print(f"  💾 저장 중... (일반 {len(general_items)} + PB {len(pb_items)} = {len(all_items)}개)")
-        
-        saved_count = 0
-        for product in reversed(all_items):
-            if not product: continue
-            try:
-                supabase.table("new_products").insert(product).execute()
-                saved_count += 1
-            except Exception as e:
-                print(f"  ⚠️ 저장 실패: {e}")
-        
-        total_count += saved_count
-        print(f"  ✅ {cat_name} 완료: {saved_count}개 저장")
-
-    print(f"\n🎉 전체 완료! 총 {total_count}개 상품 업데이트")
+            print(f"⚠️ 저장 실패: {product.get('title', 'Unknown')} - {e}")
+    
+    print(f"\n✅ 아이스크림 저장 완료: {saved_count}개")
+    print(f"🎉 크롤링 완료!")
 
 if __name__ == "__main__":
     main()
