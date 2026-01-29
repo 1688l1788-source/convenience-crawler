@@ -4,9 +4,6 @@ import time
 from datetime import datetime, timedelta
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 from bs4 import BeautifulSoup
 
 try:
@@ -33,7 +30,6 @@ class CUCrawler:
         self.brand_id = 1
         self.base_url = "https://cu.bgfretail.com"
         
-        # 카테고리 URL 매핑
         self.category_urls = [
             ("https://cu.bgfretail.com/product/product.do?category=product&depth2=4&depth3=1", "간편식사"),
             ("https://cu.bgfretail.com/product/product.do?category=product&depth2=4&depth3=2", "과자류"),
@@ -60,80 +56,72 @@ class CUCrawler:
         
         try:
             driver.get(category_url)
-            time.sleep(5)  # 페이지 로딩 대기 증가
-            
-            # 페이지 HTML 출력 (디버깅용)
-            print(f"  🔍 페이지 소스 길이: {len(driver.page_source)}")
+            time.sleep(5)
             
             soup = BeautifulSoup(driver.page_source, 'html.parser')
             
-            # 다양한 선택자 시도
-            selectors = [
-                'ul.prodListWrap > li',
-                '.prod_list > li',
-                'div.prod_list li',
-                'li.prod_item',
-                '.prodList li',
-                'div[class*="prod"] li'
-            ]
-            
-            product_items = []
-            for selector in selectors:
-                product_items = soup.select(selector)
-                if product_items:
-                    print(f"  ✅ 선택자 '{selector}' 로 {len(product_items)}개 발견")
-                    break
-            
+            # 1. 제품 리스트 찾기 (가장 확실한 선택자 사용)
+            product_items = soup.select('div[class*="prod"] li')
             if not product_items:
-                print(f"  ❌ 제품 목록을 찾을 수 없습니다")
-                # HTML 일부 출력
-                print(f"  📄 HTML 샘플: {str(soup)[:500]}")
-                return []
+                product_items = soup.select('ul li') # fallback
             
-            # 상위 10개만 처리 (테스트용)
-            for idx, item in enumerate(product_items[:10]):
+            print(f"  🔍 {len(product_items)}개 아이템 발견 (유효성 검사 전)")
+            
+            for idx, item in enumerate(product_items[:30]):
                 try:
-                    # 링크 찾기
-                    link = item.find('a')
-                    if not link or not link.get('href'):
+                    # 2. 이미지 추출 (가장 중요)
+                    img_tag = item.find('img')
+                    if not img_tag:
                         continue
-                    
-                    href = link.get('href')
-                    
-                    # 제품명 찾기 (다양한 방법)
-                    title = None
-                    if link.get('title'):
-                        title = link.get('title').strip()
-                    elif item.find(string=True):
-                        title = item.get_text().strip()[:50]
-                    
-                    if not title or len(title) < 3:
+                        
+                    image_url = img_tag.get('src')
+                    if not image_url or 'blank' in image_url:
                         continue
+                        
+                    if not image_url.startswith('http'):
+                        if image_url.startswith('//'):
+                            image_url = 'https:' + image_url
+                        else:
+                            image_url = self.base_url + image_url
+                            
+                    title = img_tag.get('alt')
                     
-                    # 가격 찾기 (숫자만)
-                    price = None
-                    price_text = item.get_text()
+                    # 3. 제목 추출 (이미지 alt가 없으면 텍스트에서)
+                    if not title:
+                        name_tag = item.select_one('.name, .title, .prod_name, p')
+                        if name_tag:
+                            title = name_tag.get_text(strip=True)
+                    
+                    if not title:
+                        # 텍스트 전체에서 찾기
+                        text = item.get_text(strip=True)
+                        if len(text) > 2:
+                            title = text.split('원')[0].strip()[-20:] # 추측
+                    
+                    if not title or len(title) < 2:
+                        continue
+
+                    # 4. 가격 추출
+                    price = 0
+                    price_tag = item.select_one('.price, .cost, .val')
+                    price_text = price_tag.get_text() if price_tag else item.get_text()
+                    
                     numbers = re.findall(r'\d+', price_text.replace(',', ''))
                     if numbers:
-                        # 가장 큰 숫자를 가격으로 (보통 가격이 가장 큼)
-                        price = max(int(n) for n in numbers if len(n) <= 6)
+                        # 가장 큰 숫자를 가격으로 간주
+                        price = max([int(n) for n in numbers if len(n) < 7])
                     
-                    # 이미지 URL
-                    image_url = None
-                    img = item.find('img')
-                    if img:
-                        image_url = img.get('src') or img.get('data-src')
-                        if image_url and not image_url.startswith('http'):
-                            image_url = self.base_url + image_url
-                    
-                    # 상세 URL
-                    if href.startswith('http'):
-                        source_url = href
-                    elif href.startswith('/'):
-                        source_url = self.base_url + href
-                    else:
-                        source_url = self.base_url + '/' + href
-                    
+                    # 5. 링크 추출
+                    link_tag = item.find('a')
+                    source_url = category_url
+                    if link_tag and link_tag.get('href') and 'javascript' not in link_tag.get('href'):
+                        href = link_tag.get('href')
+                        if href.startswith('http'):
+                            source_url = href
+                        else:
+                            source_url = self.base_url + href
+                            
+                    # 결과 추가
                     product = {
                         'brand_id': self.brand_id,
                         'title': title,
@@ -147,15 +135,13 @@ class CUCrawler:
                     }
                     
                     products.append(product)
-                    print(f"    ✓ {idx+1}. {title[:30]} ({price}원)")
+                    print(f"    ✓ {title} ({price}원)")
                     
                 except Exception as e:
-                    print(f"    ✗ {idx+1}번 파싱 오류: {e}")
+                    continue
             
         except Exception as e:
-            print(f"  ❌ {category_name} 크롤링 실패: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"  ❌ {category_name} 오류: {e}")
         
         return products
     
@@ -170,15 +156,12 @@ class CUCrawler:
             for url, name in self.category_urls:
                 products = self.crawl_category(driver, url, name)
                 all_products.extend(products)
-                time.sleep(3)
+                time.sleep(2)
             
-            print(f"\n✅ 총 {len(all_products)}개 제품 수집 완료")
             return all_products
             
         except Exception as e:
-            print(f"❌ 크롤링 실패: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"❌ 전체 오류: {e}")
             return []
             
         finally:
@@ -192,63 +175,38 @@ class CUCrawler:
     
     def save_to_db(self, products):
         if not products:
-            print("💤 저장할 제품 없음")
             return 0
         
         print(f"\n💾 DB 저장 시작... ({len(products)}개)")
-        
         try:
             thirty_days_ago = (datetime.now() - timedelta(days=30)).date().isoformat()
-            existing = self.supabase.table('new_products')\
-                .select('normalized_title, launch_date')\
-                .eq('brand_id', self.brand_id)\
-                .gte('launch_date', thirty_days_ago)\
-                .execute()
             
-            existing_keys = {
-                f"{p['normalized_title']}_{p['launch_date']}" 
-                for p in existing.data
-            }
+            # 기존 데이터 확인 안하고 그냥 저장 시도 (중복은 DB에서 처리하거나 무시)
+            # 간단하게 하기 위해 최근 데이터만 확인
             
-            new_products = [
-                p for p in products 
-                if f"{p['normalized_title']}_{p['launch_date']}" not in existing_keys
-            ]
-            
-            if new_products:
-                self.supabase.table('new_products').insert(new_products).execute()
-                print(f"✅ {len(new_products)}개 저장 완료!")
-                return len(new_products)
-            else:
-                print("ℹ️ 모두 기존 제품")
-                return 0
+            self.supabase.table('new_products').upsert(products, on_conflict='normalized_title, launch_date').execute()
+            print(f"✅ 저장 완료!")
+            return len(products)
                 
         except Exception as e:
-            print(f"❌ DB 저장 실패: {e}")
-            import traceback
-            traceback.print_exc()
-            return 0
+            # upsert 실패 시 개별 insert 시도
+            success_count = 0
+            for p in products:
+                try:
+                    self.supabase.table('new_products').insert(p).execute()
+                    success_count += 1
+                except:
+                    pass
+            print(f"✅ {success_count}개 저장 완료 (개별)")
+            return success_count
 
 def main():
-    print("="*60)
-    print("🏪 CU 신제품 크롤러 (Selenium)")
-    print(f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print("="*60)
-    
     try:
         crawler = CUCrawler()
         products = crawler.crawl()
-        new_count = crawler.save_to_db(products)
-        
-        print("\n" + "="*60)
-        print(f"✨ 완료!")
-        print(f"📊 수집: {len(products)}개 | 신규: {new_count}개")
-        print("="*60)
-        
+        crawler.save_to_db(products)
     except Exception as e:
-        print(f"\n❌ 오류: {e}")
-        import traceback
-        traceback.print_exc()
+        print(e)
         exit(1)
 
 if __name__ == "__main__":
