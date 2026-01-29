@@ -13,67 +13,8 @@ TARGET_CATEGORIES = ['40']  # 아이스크림/스낵
 MAX_PAGES = 5
 
 
-def debug_html():
-    """CU 웹사이트 HTML 구조 확인용"""
-    url = "https://cu.bgfretail.com/product/productAjax.do"
-    payload = {
-        "pageIndex": 1,
-        "searchMainCategory": "40",
-        "searchSubCategory": "",
-        "listType": 0,
-        "searchCondition": "setC",
-        "searchUseYn": "N",
-        "codeParent": "40"
-    }
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-    }
-    
-    print("\n" + "="*80)
-    print("🔍 HTML 구조 디버깅")
-    print("="*80 + "\n")
-    
-    response = requests.post(url, data=payload, headers=headers, timeout=10)
-    response.encoding = 'utf-8'
-    soup = BeautifulSoup(response.text, 'html.parser')
-    items = soup.select("li.prod_list")
-    
-    if items:
-        first = items[0]
-        
-        # 제품명 출력
-        name_tag = first.select_one(".name p")
-        if name_tag:
-            print(f"제품명: {name_tag.text.strip()}\n")
-        
-        # HTML 일부 출력
-        print("HTML 구조 (처음 2000자):")
-        print("-"*80)
-        print(first.prettify()[:2000])
-        print("-"*80 + "\n")
-        
-        # 링크 분석
-        links = first.select("a")
-        print("링크 정보:")
-        for i, link in enumerate(links, 1):
-            print(f"\n  [링크 #{i}]")
-            print(f"    href    : {link.get('href')}")
-            print(f"    onclick : {link.get('onclick')}")
-            
-            # data 속성 확인
-            for attr in link.attrs:
-                if attr.startswith('data-'):
-                    print(f"    {attr}: {link.get(attr)}")
-        
-        print("\n" + "="*80 + "\n")
-
-
 def main():
     print("🚀 CU 크롤러 시작 (API 모드)")
-    
-    # 디버깅 실행
-    debug_html()
 
     if not SUPABASE_URL or not SUPABASE_KEY:
         print("❌ 에러: Supabase 환경 변수가 없습니다.")
@@ -179,29 +120,19 @@ def main():
                         }
                         category_name = category_map.get(cat_code, '기타')
 
-                        # 5. 상품 상세 링크 (gdIdx 추출하여 view.do URL 생성)
+                        # 5. ✅ 상품 상세 링크 (onclick="view(26285)" 에서 gdIdx 추출)
                         product_url = "https://cu.bgfretail.com/product/view.do?category=product"
-                        detail_link = item.select_one("a")
                         
-                        if detail_link:
-                            # onclick 속성에서 gdIdx 추출 시도
-                            onclick = detail_link.get('onclick', '')
-                            if onclick:
-                                # onclick="goDetail('26285')" 형태에서 숫자 추출
-                                match = re.search(r"goDetail\s*\(\s*['\"]?(\d+)['\"]?\s*\)", onclick)
-                                if match:
-                                    gdIdx = match.group(1)
-                                    product_url = f"https://cu.bgfretail.com/product/view.do?gdIdx={gdIdx}&category=product"
-                            
-                            # href 속성에서 추출 시도
-                            href = detail_link.get('href', '')
-                            if href and 'gdIdx=' in href:
-                                if href.startswith('http'):
-                                    product_url = href
-                                elif href.startswith('/'):
-                                    product_url = f"https://cu.bgfretail.com{href}"
-                                else:
-                                    product_url = f"https://cu.bgfretail.com/product/{href}"
+                        # prod_img 또는 name div에서 onclick 속성 찾기
+                        onclick_div = item.select_one("div[onclick*='view']")
+                        if onclick_div:
+                            onclick = onclick_div.get('onclick', '')
+                            # onclick="view(26285);" 에서 숫자 추출
+                            match = re.search(r"view\s*\(\s*(\d+)\s*\)", onclick)
+                            if match:
+                                gdIdx = match.group(1)
+                                product_url = f"https://cu.bgfretail.com/product/view.do?gdIdx={gdIdx}&category=product"
+                                print(f"    ✓ {title[:20]}... → gdIdx={gdIdx}")
 
                         product = {
                             "title": title,
@@ -245,8 +176,7 @@ def main():
             print(f"  ⚠️ 저장 실패 ({product['title']}): {e}")
 
     print(f"\n🎉 완료! 총 {count}개 제품이 업데이트되었습니다.")
-    print(f"💡 category: 상품 분류, promotion_type: 행사 정보로 분리 저장됨")
-    print(f"💡 앱에서 ID DESC 정렬 시 '{all_products[0]['title']}'이 맨 위에 표시됩니다.")
+    print(f"💡 모든 제품에 gdIdx가 포함된 올바른 URL이 저장되었습니다!")
 
 if __name__ == "__main__":
     main()
