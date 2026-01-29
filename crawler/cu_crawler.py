@@ -9,12 +9,22 @@ import re
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY")
 
-TARGET_CATEGORIES = ['40']  # 아이스크림/스낵
+# ✅ 전체 카테고리 추가 (10단위 추측)
+TARGET_CATEGORIES = {
+    '10': '간편식사',
+    '20': '즉석조리',
+    '30': '과자',
+    '40': '아이스크림',
+    '50': '식품',
+    '60': '음료',
+    '70': '생활용품'
+}
+
 MAX_PAGES = 5
 
 
 def main():
-    print("🚀 CU 크롤러 시작 (API 모드)")
+    print("🚀 CU 크롤러 시작 (전체 카테고리)")
 
     if not SUPABASE_URL or not SUPABASE_KEY:
         print("❌ 에러: Supabase 환경 변수가 없습니다.")
@@ -30,10 +40,12 @@ def main():
         print(f"⚠️ 삭제 중 오류 (무시 가능): {e}")
 
     all_products = []
+    category_stats = {}
 
-    # 2. 카테고리별 크롤링 (정순: 1→2→3→4→5)
-    for cat_code in TARGET_CATEGORIES:
-        print(f"\n📂 카테고리 {cat_code} 크롤링 시작...")
+    # 2. 카테고리별 크롤링
+    for cat_code, cat_name in TARGET_CATEGORIES.items():
+        print(f"\n📂 카테고리 {cat_code} ({cat_name}) 크롤링 시작...")
+        category_count = 0
         
         for page in range(1, MAX_PAGES + 1):
             print(f"  - 페이지 {page} 요청 중...")
@@ -69,12 +81,13 @@ def main():
                     break
 
                 print(f"    ✅ {len(items)}개 제품 발견")
+                category_count += len(items)
                 
-                # 첫 페이지 첫 제품 확인 (디버깅용)
+                # 첫 페이지 첫 제품 확인
                 if page == 1 and items:
                     first_title = items[0].select_one(".name p")
                     if first_title:
-                        print(f"    🔝 페이지 1 첫 제품: {first_title.text.strip()}")
+                        print(f"    🔝 첫 제품: {first_title.text.strip()}")
 
                 for item in items:
                     try:
@@ -112,33 +125,22 @@ def main():
                         # 4. 카테고리 및 행사 정보
                         badge_tag = item.select_one(".badge")
                         promotion_type = badge_tag.text.strip() if badge_tag else None
-                        
-                        category_map = {
-                            '40': '아이스크림',
-                            '50': '과자',
-                            '60': '음료',
-                        }
-                        category_name = category_map.get(cat_code, '기타')
 
-                        # 5. ✅ 상품 상세 링크 (onclick="view(26285)" 에서 gdIdx 추출)
+                        # 5. 상품 상세 링크
                         product_url = "https://cu.bgfretail.com/product/view.do?category=product"
-                        
-                        # prod_img 또는 name div에서 onclick 속성 찾기
                         onclick_div = item.select_one("div[onclick*='view']")
                         if onclick_div:
                             onclick = onclick_div.get('onclick', '')
-                            # onclick="view(26285);" 에서 숫자 추출
                             match = re.search(r"view\s*\(\s*(\d+)\s*\)", onclick)
                             if match:
                                 gdIdx = match.group(1)
                                 product_url = f"https://cu.bgfretail.com/product/view.do?gdIdx={gdIdx}&category=product"
-                                print(f"    ✓ {title[:20]}... → gdIdx={gdIdx}")
 
                         product = {
                             "title": title,
                             "price": price,
                             "image_url": image_url,
-                            "category": category_name,
+                            "category": cat_name,  # ✅ 카테고리명 사용
                             "promotion_type": promotion_type,
                             "source_url": product_url,
                             "is_active": True,
@@ -155,28 +157,33 @@ def main():
 
             except Exception as e:
                 print(f"❌ 페이지 요청 에러: {e}")
+        
+        category_stats[cat_name] = category_count
+        print(f"  📊 {cat_name}: 총 {category_count}개 제품")
 
-    # 3. DB 저장 (역순으로 저장하여 찰옥수수가 가장 큰 ID를 받도록)
+    # 3. DB 저장
     print(f"\n💾 Supabase에 저장 중... (총 {len(all_products)}개)")
     count = 0
     
     if all_products:
-        print(f"  🔝 첫 크롤링: {all_products[0]['title']}")
-        print(f"  🔚 마지막 크롤링: {all_products[-1]['title']}")
-        print(f"  ⚙️  역순으로 저장하여 '{all_products[0]['title']}'이 가장 큰 ID를 받습니다.")
+        print(f"  🔝 첫 크롤링: {all_products[0]['title']} ({all_products[0]['category']})")
+        print(f"  🔚 마지막 크롤링: {all_products[-1]['title']} ({all_products[-1]['category']})")
     
     # 역순으로 저장
     for product in reversed(all_products):
         try:
             supabase.table("new_products").insert(product).execute()
             count += 1
-            if count % 10 == 0:
+            if count % 50 == 0:
                 print(f"  - {count}개 저장 완료...")
         except Exception as e:
             print(f"  ⚠️ 저장 실패 ({product['title']}): {e}")
 
+    # 카테고리별 통계 출력
     print(f"\n🎉 완료! 총 {count}개 제품이 업데이트되었습니다.")
-    print(f"💡 모든 제품에 gdIdx가 포함된 올바른 URL이 저장되었습니다!")
+    print("\n📊 카테고리별 통계:")
+    for cat_name, cat_count in category_stats.items():
+        print(f"  - {cat_name}: {cat_count}개")
 
 if __name__ == "__main__":
     main()
