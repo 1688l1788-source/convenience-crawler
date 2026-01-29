@@ -11,8 +11,14 @@ SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY")
 MAX_SEARCH_PAGES = 100
 CHUNK_SIZE = 50
 
-def parse_product(item):
-    """상품 파싱 (gdIdx 포함)"""
+# ✅ 다중 카테고리
+CATEGORIES = [
+    {"id": "40", "name": "아이스크림"},
+    {"id": "30", "name": "과자류"},
+]
+
+def parse_product(item, category_name):
+    """상품 파싱"""
     try:
         name_tag = item.select_one(".name p")
         title = (name_tag.get_text(strip=True) if name_tag else "").strip()
@@ -33,7 +39,7 @@ def parse_product(item):
         badge_tag = item.select_one(".badge")
         promotion_type = badge_tag.get_text(strip=True) if badge_tag else None
 
-        # ✅ gdIdx 추출 (중복 체크용)
+        # ✅ gdIdx 추출
         gdIdx = None
         onclick_div = item.select_one("div[onclick*='view']")
         if onclick_div:
@@ -51,27 +57,27 @@ def parse_product(item):
             "title": title,
             "price": price,
             "image_url": image_url,
-            "category": "아이스크림",
+            "category": category_name,
             "promotion_type": promotion_type,
             "source_url": product_url,
             "is_active": True,
             "brand_id": 1,
-            "external_id": gdIdx  # ✅ 상품 고유번호
+            "external_id": gdIdx
         }
     except Exception as e:
         print(f"파싱 에러: {e}")
         return None
 
-def fetch_new_products(supabase, max_gdIdx):
+def fetch_new_products(supabase, category_id, category_name, max_gdIdx):
     """신상품만 크롤링"""
     new_products = []
-    print(f"🔄 max_gdIdx={max_gdIdx}보다 큰 상품 찾기...")
+    print(f"\n🔄 [{category_name}] max_gdIdx={max_gdIdx}보다 큰 상품 찾기...")
     
     for page in range(1, MAX_SEARCH_PAGES + 1):
         url = "https://cu.bgfretail.com/product/productAjax.do"
         payload = {
             "pageIndex": page, 
-            "searchMainCategory": "40",
+            "searchMainCategory": category_id,
             "listType": 0
         }
         headers = {
@@ -91,7 +97,7 @@ def fetch_new_products(supabase, max_gdIdx):
             
             count_in_page = 0
             for item in items:
-                p = parse_product(item)
+                p = parse_product(item, category_name)
                 if p and p['external_id'] is not None:
                     if p['external_id'] > max_gdIdx:
                         new_products.append(p)
@@ -118,7 +124,8 @@ def remove_duplicates(products):
             unique[p['external_id']] = p
     
     result = list(unique.values())
-    print(f"중복 제거: {len(products)} → {len(result)}개")
+    if len(products) != len(result):
+        print(f"  중복 제거: {len(products)} → {len(result)}개")
     return result
 
 def chunk(lst, size):
@@ -132,50 +139,69 @@ def main():
 
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
     
-    # 1. 최대 external_id 조회 (NULL 제외)
-    try:
-        last_item = supabase.table("new_products") \
-            .select("external_id") \
-            .eq("brand_id", 1) \
-            .not_.is_("external_id", None) \
-            .order("external_id", desc=True) \
-            .limit(1) \
-            .execute()
+    total_saved = 0
+    
+    # 각 카테고리별 크롤링
+    for cat in CATEGORIES:
+        cat_id = cat["id"]
+        cat_name = cat["name"]
         
-        max_gdIdx = last_item.data[0]['external_id'] if last_item.data else 0
-        print(f"📊 현재 DB 마지막 상품 번호: {max_gdIdx}")
+        print(f"\n{'='*60}")
+        print(f"📦 카테고리: {cat_name} (ID: {cat_id})")
+        print(f"{'='*60}")
         
-    except Exception as e:
-        print(f"DB 조회 에러: {e}")
-        max_gdIdx = 0
-
-    # 2. 신상품 크롤링
-    raw_products = fetch_new_products(supabase, max_gdIdx)
-
-    # 3. 중복 제거
-    unique_products = remove_duplicates(raw_products)
-
-    # 4. 저장
-    if unique_products:
-        print(f"\n💾 {len(unique_products)}개 저장 중...")
-        
-        saved_count = 0
-        for chunk_list in chunk(unique_products, CHUNK_SIZE):
-            try:
-                supabase.table("new_products").insert(chunk_list).execute()
-                saved_count += len(chunk_list)
-                print(f"  {saved_count}/{len(unique_products)} 저장 완료")
-            except Exception as e:
-                print(f"  저장 실패: {e}")
-                break
-        
-        print(f"🎉 저장 완료: {saved_count}개")
-        if unique_products:
-            print(f"   - 최신 1위: {unique_products[-1]['title']}")
-            print(f"   - 최신 2위: {unique_products[-2]['title'] if len(unique_products)>1 else '없음'}")
+        # 1. 최대 external_id 조회 (NULL 제외)
+        try:
+            last_item = supabase.table("new_products") \
+                .select("external_id") \
+                .eq("brand_id", 1) \
+                .eq("category", cat_name) \
+                .not_.is_("external_id", None) \
+                .order("external_id", desc=True) \
+                .limit(1) \
+                .execute()
             
-    else:
-        print("\n✨ 새로운 상품이 없습니다.")
+            max_gdIdx = last_item.data[0]['external_id'] if last_item.data else 0
+            print(f"📊 현재 DB 마지막 상품 번호: {max_gdIdx}")
+            
+        except Exception as e:
+            print(f"DB 조회 에러: {e}")
+            max_gdIdx = 0
+
+        # 2. 신상품 크롤링
+        raw_products = fetch_new_products(supabase, cat_id, cat_name, max_gdIdx)
+
+        if not raw_products:
+            print(f"✨ {cat_name}에 새로운 상품이 없습니다.")
+            continue
+
+        # 3. 중복 제거
+        unique_products = remove_duplicates(raw_products)
+
+        # 4. 저장
+        if unique_products:
+            print(f"\n💾 {len(unique_products)}개 저장 중...")
+            
+            saved_count = 0
+            for chunk_list in chunk(unique_products, CHUNK_SIZE):
+                try:
+                    supabase.table("new_products").insert(chunk_list).execute()
+                    saved_count += len(chunk_list)
+                    print(f"  {saved_count}/{len(unique_products)} 저장 완료")
+                except Exception as e:
+                    print(f"  저장 실패: {e}")
+                    break
+            
+            print(f"🎉 {cat_name} 저장 완료: {saved_count}개")
+            if unique_products:
+                print(f"   - 최신 1위: {unique_products[-1]['title']}")
+                print(f"   - 최신 2위: {unique_products[-2]['title'] if len(unique_products)>1 else '없음'}")
+            
+            total_saved += saved_count
+    
+    print(f"\n{'='*60}")
+    print(f"🎉 전체 크롤링 완료! 총 {total_saved}개 저장됨")
+    print(f"{'='*60}")
 
 if __name__ == "__main__":
     main()
