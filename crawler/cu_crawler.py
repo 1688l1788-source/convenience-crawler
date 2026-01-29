@@ -1,295 +1,147 @@
-import os
-import re
-import time
-from datetime import datetime, timedelta
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
+import requests
 from bs4 import BeautifulSoup
+from supabase import create_client
+import os
+import time
 
-try:
-    from supabase import create_client, Client
-except ImportError:
-    from supabase import create_client
+# --- 설정 ---
+# Supabase 환경 변수 (GitHub Secrets에 설정된 값 사용)
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY")
 
-class CUCrawler:
-    def __init__(self):
-        supabase_url = os.getenv('SUPABASE_URL')
-        supabase_key = os.getenv('SUPABASE_SERVICE_KEY')
-        
-        if not supabase_url or not supabase_key:
-            raise Exception("Supabase 환경변수가 설정되지 않았습니다")
-        
-        try:
-            self.supabase = create_client(supabase_url, supabase_key)
-        except TypeError:
-            self.supabase = create_client(
-                supabase_url=supabase_url,
-                supabase_key=supabase_key
-            )
-        
-        self.brand_id = 1
-        self.base_url = "https://cu.bgfretail.com"
-        
-        self.category_urls = [
-            ("https://cu.bgfretail.com/product/product.do?category=product&depth2=4&depth3=1", "간편식사"),
-            ("https://cu.bgfretail.com/product/product.do?category=product&depth2=4&depth3=2", "과자류"),
-            ("https://cu.bgfretail.com/product/product.do?category=product&depth2=4&depth3=3", "아이스크림"),
-            ("https://cu.bgfretail.com/product/product.do?category=product&depth2=4&depth3=4", "식품"),
-            ("https://cu.bgfretail.com/product/product.do?category=product&depth2=4&depth3=5", "음료"),
-        ]
-    
-    def setup_driver(self):
-        chrome_options = Options()
-        chrome_options.add_argument('--headless')
-        chrome_options.add_argument('--no-sandbox')
-        chrome_options.add_argument('--disable-dev-shm-usage')
-        chrome_options.add_argument('--disable-gpu')
-        chrome_options.add_argument('--window-size=1920,1080')
-        chrome_options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
-        
-        driver = webdriver.Chrome(options=chrome_options)
-        return driver
-    
-    def extract_gdidx(self, item):
-        """onclick=view(26285) 에서 gdIdx 추출"""
-        try:
-            clickable = item.find(attrs={'onclick': True})
-            if clickable:
-                onclick = clickable.get('onclick', '')
-                match = re.search(r'view\((\d+)\)', onclick)
-                if match:
-                    return match.group(1)
-        except:
-            pass
-        return None
-    
-    def crawl_category(self, driver, category_url, category_name):
-        print(f"\n📂 {category_name} 크롤링 중...")
-        products = []
-        
-        try:
-            driver.get(category_url)
-            time.sleep(5)
-            
-            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(2)
-            
-            soup = BeautifulSoup(driver.page_source, 'html.parser')
-            
-            product_area = soup.select_one('.prodListWrap, .prodArea')
-            if not product_area:
-                print(f"  ⚠️ 제품 영역을 찾을 수 없습니다")
-                return products
-            
-            items = product_area.select('li')
-            print(f"  🔍 {len(items)}개 항목 발견")
-            
-            for item in items:
-                try:
-                    # 1. 제품 이미지 확인
-                    img = item.select_one('img[src*="/product/"]')
-                    if not img:
-                        continue
-                    
-                    image_url = img.get('src', '')
-                    
-                    # New 태그나 아이콘 제외
-                    if 'icon' in image_url or 'tag_' in image_url or 'blank' in image_url:
-                        continue
-                    
-                    # HTTPS 변환
-                    if image_url.startswith('//'):
-                        image_url = 'https:' + image_url
-                    elif not image_url.startswith('http'):
-                        image_url = self.base_url + image_url
-                    
-                    # 2. 제품명 추출
-                    name_tag = item.select_one('p')
-                    if not name_tag:
-                        continue
-                    
-                    title = name_tag.get_text(strip=True)
-                    
-                    # 제품명 검증 강화
-                    if not title or len(title) < 3:
-                        continue
-                    
-                    # 파일명 패턴 제외 (숫자.확장자)
-                    if re.match(r'^\d+\.(jpg|png|jpeg)$', title, re.IGNORECASE):
-                        continue
-                    
-                    # New 태그 제외
-                    if title == 'New':
-                        continue
-                    
-                    # 확장자로 끝나는 경우 제외
-                    if title.lower().endswith(('.jpg', '.png', '.jpeg')):
-                        continue
-                    
-                    # 3. gdIdx 추출 (상세 페이지 URL)
-                    gdidx = self.extract_gdidx(item)
-                    
-                    if gdidx:
-                        source_url = f"{self.base_url}/product/view.do?gdIdx={gdidx}&category=product"
-                    else:
-                        source_url = category_url
-                    
-                    # PB 상품 페이지 제외
-                    if 'pb.do' in source_url:
-                        continue
-                    
-                    # 4. 가격 추출
-                    price = 0
-                    price_tag = item.select_one('.price, .val, span[class*="price"]')
-                    
-                    if price_tag:
-                        price_text = price_tag.get_text()
-                        numbers = re.findall(r'\d+', price_text.replace(',', ''))
-                        if numbers:
-                            valid = [int(n) for n in numbers if 100 <= int(n) < 1000000]
-                            if valid:
-                                price = max(valid)
-                    
-                    # 가격 없으면 전체 텍스트에서
-                    if price == 0:
-                        all_text = item.get_text()
-                        matches = re.findall(r'(\d{1,3}(?:,\d{3})*|\d+)\s*원', all_text)
-                        if matches:
-                            price = int(matches[0].replace(',', ''))
-                    
-                    # 5. 카테고리 키워드 검증
-                    if not self.validate_category(title, category_name):
-                        print(f"    ⚠️ 카테고리 불일치 스킵: {title}")
-                        continue
-                    
-                    # 결과 추가
-                    product = {
-                        'brand_id': self.brand_id,
-                        'title': title,
-                        'normalized_title': self.normalize_title(title),
-                        'price': price,
-                        'category': category_name,
-                        'launch_date': datetime.now().date().isoformat(),
-                        'image_url': image_url,
-                        'source_url': source_url,
-                        'is_active': True
-                    }
-                    
-                    products.append(product)
-                    print(f"    ✓ {title[:40]} ({price}원) [gdIdx:{gdidx or 'N/A'}]")
-                    
-                except Exception as e:
-                    continue
-            
-            print(f"  ✅ {len(products)}개 수집 완료")
-            
-        except Exception as e:
-            print(f"  ❌ {category_name} 오류: {e}")
-        
-        return products
-    
-    def validate_category(self, title, category):
-        """카테고리별 키워드로 검증"""
-        title_lower = title.lower()
-        
-        keywords = {
-            '아이스크림': ['아이스크림', '빙과', '콘', '바', '슬러시', 'ice', '소프트', '젤라또', '셔벗', '소르베', '팝콘'],
-            '과자류': ['과자', '스낵', '칩', '쿠키', '비스킷', '초콜릿', '사탕', '젤리', '껌', '캔디', '웨하스', '크래커'],
-            '음료': ['음료', '주스', '커피', '차', '워터', '탄산', '에너지', '이온', '밀크', '라떼', '에이드', '스무디'],
-            '간편식사': ['도시락', '김밥', '샌드위치', '삼각', '주먹밥', '햄버거', '핫도그', '토스트', '롤', '랩'],
-            '식품': ['라면', '컵라면', '우유', '빵', '계란', '치즈', '햄', '소시지', '두부', '김', '냉동']
-        }
-        
-        if category in keywords:
-            return any(keyword in title_lower for keyword in keywords[category])
-        
-        return True
-    
-    def crawl(self):
-        print("🏪 CU 신제품 크롤링 시작...")
-        driver = None
-        all_products = []
-        
-        try:
-            driver = self.setup_driver()
-            
-            for url, name in self.category_urls:
-                products = self.crawl_category(driver, url, name)
-                all_products.extend(products)
-                time.sleep(3)
-            
-            return all_products
-            
-        except Exception as e:
-            print(f"❌ 전체 오류: {e}")
-            return []
-            
-        finally:
-            if driver:
-                driver.quit()
-    
-    def normalize_title(self, title):
-        normalized = re.sub(r'\s+', ' ', title)
-        normalized = re.sub(r'[^\w\s가-힣]', '', normalized)
-        return normalized.strip().upper()
-    
-    def save_to_db(self, products):
-        if not products:
-            print("⚠️ 저장할 제품이 없습니다")
-            return 0
-        
-        print(f"\n💾 DB 저장 시작... ({len(products)}개)")
-        
-        try:
-            # 중복 제거
-            seen = set()
-            unique_products = []
-            for p in products:
-                key = f"{p['normalized_title']}_{p['category']}"
-                if key not in seen:
-                    seen.add(key)
-                    unique_products.append(p)
-            
-            print(f"  📦 중복 제거 후: {len(unique_products)}개")
-            
-            # 배치 저장
-            self.supabase.table('new_products').upsert(
-                unique_products,
-                on_conflict='normalized_title,launch_date'
-            ).execute()
-            
-            print(f"✅ {len(unique_products)}개 저장 완료!")
-            return len(unique_products)
-            
-        except Exception as e:
-            print(f"⚠️ Batch 저장 실패: {e}")
-            print(f"  개별 저장 시도...")
-            
-            success_count = 0
-            for p in unique_products:
-                try:
-                    self.supabase.table('new_products').insert(p).execute()
-                    success_count += 1
-                except:
-                    pass
-            
-            print(f"✅ {success_count}개 저장 완료 (개별)")
-            return success_count
+# 크롤링할 카테고리 설정
+# 40: 아이스크림/스낵 (사용자 요청)
+# 필요시 리스트에 추가: ['10'(간편식), '20'(즉석요리), '30'(음료), '40'(과자/아이스크림)]
+TARGET_CATEGORIES = ['40'] 
+MAX_PAGES = 5  # 가져올 페이지 수 (페이지당 20~40개)
 
 def main():
+    print("🚀 CU 크롤러 시작 (API 모드)")
+
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        print("❌ 에러: Supabase 환경 변수가 없습니다.")
+        return
+
+    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+    
+    # 1. 기존 데이터 초기화 (선택사항: 깔끔하게 새로 시작하려면 주석 해제)
+    print("🗑️ 기존 데이터 삭제 중...")
     try:
-        crawler = CUCrawler()
-        products = crawler.crawl()
-        
-        if products:
-            crawler.save_to_db(products)
-        else:
-            print("❌ 수집된 제품이 없습니다")
-            exit(1)
-            
+        supabase.table("new_products").delete().neq("id", 0).execute()
     except Exception as e:
-        print(f"❌ 크롤러 오류: {e}")
-        exit(1)
+        print(f"⚠️ 삭제 중 오류 (무시 가능): {e}")
+
+    all_products = []
+
+    # 2. 카테고리별 크롤링
+    for cat_code in TARGET_CATEGORIES:
+        print(f"\n📂 카테고리 {cat_code} 크롤링 시작...")
+        
+        for page in range(1, MAX_PAGES + 1):
+            print(f"  - 페이지 {page} 요청 중...")
+            
+            # CU API URL 및 파라미터 (사용자가 찾은 값 적용)
+            url = "https://cu.bgfretail.com/product/productAjax.do"
+            payload = {
+                "pageIndex": page,
+                "searchMainCategory": cat_code,
+                "searchSubCategory": "",
+                "listType": 1,
+                "searchCondition": "",
+                "searchUseYn": "N",
+                "codeParent": cat_code,
+            }
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+            }
+
+            try:
+                response = requests.post(url, data=payload, headers=headers, timeout=10)
+                response.encoding = 'utf-8' # 한글 깨짐 방지
+                
+                if response.status_code != 200:
+                    print(f"❌ 요청 실패: {response.status_code}")
+                    continue
+
+                # HTML 파싱
+                soup = BeautifulSoup(response.text, 'html.parser')
+                items = soup.select("li.prod_list") # 제품 리스트 선택자
+
+                if not items:
+                    print("    ℹ️ 더 이상 제품이 없습니다.")
+                    break
+
+                print(f"    ✅ {len(items)}개 제품 발견")
+
+                for item in items:
+                    try:
+                        # 1. 제품명
+                        name_tag = item.select_one(".name > p")
+                        if not name_tag: continue
+                        title = name_tag.text.strip()
+
+                        # 2. 가격
+                        price_tag = item.select_one(".price > strong")
+                        price_text = price_tag.text.strip().replace(",", "").replace("원", "") if price_tag else "0"
+                        price = int(price_text)
+
+                        # 3. 이미지 URL
+                        img_tag = item.select_one(".photo img")
+                        image_url = img_tag['src'] if img_tag else ""
+                        if image_url and not image_url.startswith("http"):
+                            image_url = f"https:{image_url}" if image_url.startswith("//") else image_url
+
+                        # 4. 행사 정보 (New, 1+1 등)
+                        badge_tag = item.select_one(".badge")
+                        category_name = "기타"
+                        if badge_tag:
+                            category_name = badge_tag.text.strip()
+                        if not category_name:
+                            category_name = "일반"
+
+                        # 데이터 저장용 딕셔너리
+                        product = {
+                            "title": title,
+                            "price": price,
+                            "image_url": image_url,
+                            "category": category_name, # DB 컬럼에 맞게 조정 (예: 1+1, NEW 등)
+                            "source_url": "https://cu.bgfretail.com/product/product.do?category=product",
+                            "is_active": True
+                        }
+                        
+                        all_products.append(product)
+
+                    except Exception as e:
+                        print(f"    ⚠️ 제품 파싱 에러: {e}")
+                        continue
+                
+                time.sleep(1) # 서버 부하 방지
+
+            except Exception as e:
+                print(f"❌ 페이지 요청 에러: {e}")
+
+    # 3. 데이터 뒤집기 (오래된 것 -> 최신 순으로 정렬)
+    # 이렇게 해야 DB에 먼저 들어간게 ID가 낮고, 나중에 들어간게 ID가 높아져서
+    # 앱에서 '최신순(ID 역순/생성일 역순)'으로 볼 때 최신 제품이 맨 위에 뜹니다.
+    print(f"\n🔄 데이터 정렬 중... (총 {len(all_products)}개)")
+    all_products.reverse()
+
+    # 4. DB 저장
+    print("💾 Supabase에 저장 중...")
+    count = 0
+    for product in all_products:
+        try:
+            # 중복 체크 없이 단순 삽입 (앞에서 전체 삭제 했으므로)
+            # 만약 upsert를 원하면 .upsert() 사용
+            supabase.table("new_products").insert(product).execute()
+            count += 1
+            if count % 10 == 0:
+                print(f"  - {count}개 저장 완료...")
+        except Exception as e:
+            print(f"  ⚠️ 저장 실패 ({product['title']}): {e}")
+
+    print(f"\n🎉 완료! 총 {count}개 제품이 업데이트되었습니다.")
 
 if __name__ == "__main__":
     main()
