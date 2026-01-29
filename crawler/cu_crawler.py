@@ -1,24 +1,11 @@
 import os
 import time
 import re
-import json
 import requests
 from supabase import create_client
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY")
-
-def extract_csrf_token(html):
-    """CSRFToken 추출"""
-    patterns = [
-        r'"CSRFToken"\s*:\s*"([^"]+)"',
-        r'CSRFToken["\']?\s*[:=]\s*["\']([^"\']+)["\']',
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, html, re.IGNORECASE)
-        if match:
-            return match.group(1)
-    return None
 
 def create_gs25_session():
     session = requests.Session()
@@ -28,18 +15,49 @@ def create_gs25_session():
     })
     
     r = session.get("http://gs25.gsretail.com/gscvs/ko/products/event-goods")
-    csrf_token = extract_csrf_token(r.text)
+    csrf_match = re.search(r'"CSRFToken"\s*:\s*"([^"]+)"', r.text)
+    csrf_token = csrf_match.group(1) if csrf_match else None
     
-    print(f"✅ CSRFToken: {csrf_token[:20] if csrf_token else '실패'}")
+    print(f"✅ CSRFToken: {csrf_token[:20] if csrf_token else '없음'}")
     return session, csrf_token
 
-def fetch_gs25_promotions(session, csrf_token):
-    url = "http://gs25.gsretail.com/gscvs/ko/products/event-goods-search"
+def parse_gs25_promotion(item):
+    """Supabase 테이블에 맞춤 파싱"""
+    try:
+        title = item.get("goodsNm", "")[:255]  # varchar 제한
+        price = int(item.get("price", 0))
+        att_file_id = item.get("attFileId", "")
+        
+        # external_id: bigint (긴 숫자)
+        id_match = re.search(r'MD0*(\d+)', att_file_id)
+        external_id = int(id_match.group(1)) if id_match else None
+        
+        if external_id and title:
+            return {
+                "title": title,
+                "price": price,
+                "image_url": item.get("attFileNm", ""),
+                "category": "GS25행사상품",
+                "promotion_type": f"{item.get('eventTypeNm', '')} ({item.get('prmtCd', '')})",
+                "source_url": "http://gs25.gsretail.com/gscvs/ko/products/event-goods",
+                "is_active": True,
+                "brand_id": 2,
+                "external_id": external_id  # 👈 bigint 호환
+                # id, normalized_title, timestamps는 자동
+            }
+    except:
+        pass
+    return None
+
+def main():
+    session, csrf_token = create_gs25_session()
+    if not csrf_token:
+        print("❌ 세션 실패")
+        return
     
-    promotions = []
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
     
-    # 기존 최대 ID
+    # 기존 최대 ID (bigint)
     try:
         res = supabase.table("new_products") \
             .select("external_id") \
@@ -51,7 +69,10 @@ def fetch_gs25_promotions(session, csrf_token):
     except:
         max_id = 0
     
-    print(f"📊 기준 ID: {max_id}")
+    print(f"📊 기준 external_id: {max_id}")
+    
+    url = "http://gs25.gsretail.com/gscvs/ko/products/event-goods-search"
+    promotions = []
     
     for page in range(1, 6):
         payload = {
@@ -63,7 +84,7 @@ def fetch_gs25_promotions(session, csrf_token):
             "parameterList": "ONE_TO_ONE"
         }
         
-        print(f"📡 페이지 {page}...")
+        print(f"📡 페이지 {page}/5...")
         r = session.post(url, data=payload)
         
         outer_match = re.search(r'^\s*(\{.*\})\s*$', r.text, re.DOTALL)
@@ -78,60 +99,31 @@ def fetch_gs25_promotions(session, csrf_token):
                     new_items.append(p)
             
             promotions.extend(new_items)
-            print(f"   ➕ {len(new_items)}개")
-            
-            if len(items) < 50:
-                break
-        
-        time.sleep(0.5)
-    
-    return promotions
-
-def parse_gs25_promotion(item):
-    """파싱"""
-    try:
-        title = item.get("goodsNm", "")
-        price = int(item.get("price", 0))
-        att_file_id = item.get("attFileId", "")
-        
-        id_match = re.search(r'MD0*(\d+)', att_file_id)
-        external_id = int(id_match.group(1)) if id_match else None
-        
-        if external_id and title:
-            return {
-                "title": title[:200],
-                "price": price,
-                "image_url": item.get("attFileNm", ""),
-                "category": "GS25행사상품",
-                "promotion_type": f"{item.get('eventTypeNm', '')} ({item.get('prmtCd', '')})",
-                "source_url": "http://gs25.gsretail.com/gscvs/ko/products/event-goods",
-                "is_active": True,
-                "brand_id": 2,
-                "external_id": external_id
-            }
-    except:
-        pass
-    return None
-
-def main():
-    session, csrf_token = create_gs25_session()
-    if not csrf_token:
-        print("❌ 세션 실패")
-        return
-    
-    promotions = fetch_gs25_promotions(session, csrf_token)
+            print(f"   ➕ {len(new_items)}개 신규")
     
     if promotions:
-        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-        supabase.table("new_products") \
-            .upsert(promotions, on_conflict=["external_id", "brand_id"]) \
-            .execute()
-        
-        print(f"\n🎉 {len(promotions)}개 GS25행사상품 저장 완료!")
-        for p in promotions[:3]:
-            print(f"   📦 {p['title'][:40]}... | {p['promotion_type']} | {p['price']}원")
+        print(f"\n💾 {len(promotions)}개 저장...")
+        try:
+            supabase.table("new_products") \
+                .insert(promotions) \
+                .execute()  # 👈 insert 사용 (upsert 대신)
+            
+            print(f"🎉 {len(promotions)}개 GS25행사상품 저장 완료!")
+            
+            # 확인
+            count = supabase.table("new_products") \
+                .select("count", count="external_id") \
+                .eq("brand_id", 2) \
+                .eq("category", "GS25행사상품") \
+                .execute()
+            
+            print(f"📊 최종 GS25 수: {count.count}")
+            
+        except Exception as e:
+            print(f"❌ 저장 에러: {e}")
+            print("샘플 데이터:", promotions[0] if promotions else "없음")
     else:
-        print("😴 신규 행사상품 없음")
+        print("😴 신규 없음 (이미 최신)")
 
 if __name__ == "__main__":
     main()
