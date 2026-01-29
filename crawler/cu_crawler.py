@@ -11,12 +11,16 @@ SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY")
 MAX_SEARCH_PAGES = 100
 CHUNK_SIZE = 50
 
-# ✅ 다중 카테고리
+# ✅ CU 모든 카테고리
 CATEGORIES = [
     {"id": "40", "name": "아이스크림"},
     {"id": "30", "name": "과자류"},
+    {"id": "10", "name": "간편식사"},
+    {"id": "11", "name": "즉석조리"},
+    {"id": "20", "name": "식품"},
+    {"id": "60", "name": "음료"},
+    {"id": "50", "name": "생활용품"},
 ]
-
 def parse_product(item, category_name):
     """상품 파싱"""
     try:
@@ -205,3 +209,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
