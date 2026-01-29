@@ -107,9 +107,18 @@ def main():
                                 elif not image_url.startswith('http'):
                                     image_url = f"https://cu.bgfretail.com/{image_url}"
 
-                        # 4. 행사 정보
+                        # 4. 카테고리 및 행사 정보
                         badge_tag = item.select_one(".badge")
-                        category_name = badge_tag.text.strip() if badge_tag else "일반"
+                        promotion_type = badge_tag.text.strip() if badge_tag else None
+                        
+                        # ✅ 실제 상품 카테고리 (카테고리 코드에 따라 자동 매핑)
+                        category_map = {
+                            '40': '아이스크림',
+                            '50': '과자',
+                            '60': '음료',
+                            # 추가 카테고리는 여기에 추가
+                        }
+                        category_name = category_map.get(cat_code, '기타')
 
                         # 5. 상품 상세 링크
                         detail_link = item.select_one("a")
@@ -123,11 +132,13 @@ def main():
                             elif '?' in href or 'product' in href:
                                 product_url = f"https://cu.bgfretail.com/product/{href}"
 
+                        # ✅ category는 상품 분류, promotion_type은 행사 정보
                         product = {
                             "title": title,
                             "price": price,
                             "image_url": image_url,
-                            "category": category_name,
+                            "category": category_name,  # 아이스크림, 과자, 음료 등
+                            "promotion_type": promotion_type,  # 1+1, 2+1, 덤증정 등 (없으면 None)
                             "source_url": product_url,
                             "is_active": True,
                             "brand_id": 1
@@ -144,7 +155,7 @@ def main():
             except Exception as e:
                 print(f"❌ 페이지 요청 에러: {e}")
 
-    # 3. DB 저장 (✅ 역순으로 저장하여 찰옥수수가 가장 큰 ID를 받도록)
+    # 3. DB 저장 (역순으로 저장하여 찰옥수수가 가장 큰 ID를 받도록)
     print(f"\n💾 Supabase에 저장 중... (총 {len(all_products)}개)")
     count = 0
     
@@ -153,7 +164,7 @@ def main():
         print(f"  🔚 마지막 크롤링: {all_products[-1]['title']}")
         print(f"  ⚙️  역순으로 저장하여 '{all_products[0]['title']}'이 가장 큰 ID를 받습니다.")
     
-    # ✅ 역순으로 저장
+    # 역순으로 저장
     for product in reversed(all_products):
         try:
             supabase.table("new_products").insert(product).execute()
@@ -164,6 +175,7 @@ def main():
             print(f"  ⚠️ 저장 실패 ({product['title']}): {e}")
 
     print(f"\n🎉 완료! 총 {count}개 제품이 업데이트되었습니다.")
+    print(f"💡 category: 상품 분류, promotion_type: 행사 정보로 분리 저장됨")
     print(f"💡 앱에서 ID DESC 정렬 시 '{all_products[0]['title']}'이 맨 위에 표시됩니다.")
 
 if __name__ == "__main__":
