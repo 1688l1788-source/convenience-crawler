@@ -4,6 +4,9 @@ import time
 from datetime import datetime, timedelta
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 from bs4 import BeautifulSoup
 
 try:
@@ -60,22 +63,49 @@ class CUCrawler:
             
             soup = BeautifulSoup(driver.page_source, 'html.parser')
             
-            # 1. 제품 리스트 찾기 (가장 확실한 선택자 사용)
-            product_items = soup.select('div[class*="prod"] li')
-            if not product_items:
-                product_items = soup.select('ul li') # fallback
+            # 제품 리스트 찾기 - 더 정확한 선택자 사용
+            product_items = soup.select('div.prodListWrap ul.prodList li')
             
-            print(f"  🔍 {len(product_items)}개 아이템 발견 (유효성 검사 전)")
+            if not product_items:
+                product_items = soup.select('ul.prodList > li')
+            
+            if not product_items:
+                product_items = soup.select('div[class*="prod"] li')
+            
+            print(f"  🔍 {len(product_items)}개 아이템 발견")
             
             for idx, item in enumerate(product_items[:30]):
                 try:
-                    # 2. 이미지 추출 (가장 중요)
+                    # 1. 링크 먼저 추출 (가장 중요)
+                    link_tag = item.find('a')
+                    if not link_tag or not link_tag.get('href'):
+                        continue
+                    
+                    href = link_tag.get('href')
+                    
+                    # javascript: 링크는 무시 (상세 페이지 아님)
+                    if 'javascript' in href or href == '#':
+                        continue
+                    
+                    # 개별 상품 상세 페이지 URL 구성
+                    if href.startswith('http'):
+                        source_url = href
+                    elif href.startswith('/'):
+                        source_url = self.base_url + href
+                    else:
+                        source_url = self.base_url + '/' + href
+                    
+                    # 상세페이지 링크가 아니면 스킵
+                    if 'goodsDetail' not in source_url and 'itemId' not in source_url:
+                        continue
+                    
+                    # 2. 이미지 추출
                     img_tag = item.find('img')
                     if not img_tag:
                         continue
                         
                     image_url = img_tag.get('src')
-                    if not image_url or 'blank' in image_url:
+                    if not image_url or 'blank' in image_url or 'noimage' in image_url:
                         continue
                         
                     if not image_url.startswith('http'):
@@ -83,44 +113,58 @@ class CUCrawler:
                             image_url = 'https:' + image_url
                         else:
                             image_url = self.base_url + image_url
-                            
+                    
+                    # 3. 제목 추출
                     title = img_tag.get('alt')
                     
-                    # 3. 제목 추출 (이미지 alt가 없으면 텍스트에서)
-                    if not title:
-                        name_tag = item.select_one('.name, .title, .prod_name, p')
+                    if not title or len(title) < 2:
+                        # alt가 없으면 name 클래스에서 찾기
+                        name_tag = item.select_one('.name, .prodName, .prod_name, p.name')
                         if name_tag:
                             title = name_tag.get_text(strip=True)
                     
-                    if not title:
-                        # 텍스트 전체에서 찾기
-                        text = item.get_text(strip=True)
-                        if len(text) > 2:
-                            title = text.split('원')[0].strip()[-20:] # 추측
-                    
                     if not title or len(title) < 2:
+                        continue
+                    
+                    # 파일명이 제목인 경우 스킵 (실제 상품명이 아님)
+                    if title.endswith('.jpg') or title.endswith('.png'):
+                        # 상세 페이지에서 제목 추출 시도
+                        try:
+                            driver.get(source_url)
+                            time.sleep(2)
+                            detail_soup = BeautifulSoup(driver.page_source, 'html.parser')
+                            title_elem = detail_soup.select_one('.prodTitle, .prod_tit, h3, .title')
+                            if title_elem:
+                                title = title_elem.get_text(strip=True)
+                            driver.back()
+                            time.sleep(1)
+                        except:
+                            continue
+                    
+                    # 여전히 파일명이면 스킵
+                    if title.endswith('.jpg') or title.endswith('.png'):
                         continue
 
                     # 4. 가격 추출
                     price = 0
-                    price_tag = item.select_one('.price, .cost, .val')
-                    price_text = price_tag.get_text() if price_tag else item.get_text()
+                    price_tag = item.select_one('.price, .val, span.val, .cost')
                     
-                    numbers = re.findall(r'\d+', price_text.replace(',', ''))
-                    if numbers:
-                        # 가장 큰 숫자를 가격으로 간주
-                        price = max([int(n) for n in numbers if len(n) < 7])
+                    if price_tag:
+                        price_text = price_tag.get_text()
+                        numbers = re.findall(r'\d+', price_text.replace(',', ''))
+                        if numbers:
+                            price = max([int(n) for n in numbers if 100 <= int(n) < 1000000])
                     
-                    # 5. 링크 추출
-                    link_tag = item.find('a')
-                    source_url = category_url
-                    if link_tag and link_tag.get('href') and 'javascript' not in link_tag.get('href'):
-                        href = link_tag.get('href')
-                        if href.startswith('http'):
-                            source_url = href
-                        else:
-                            source_url = self.base_url + href
-                            
+                    # 가격이 없으면 전체 텍스트에서 추출
+                    if price == 0:
+                        text = item.get_text()
+                        numbers = re.findall(r'\d+', text.replace(',', ''))
+                        if numbers:
+                            # 합리적인 가격 범위만 선택 (100원 ~ 100만원)
+                            valid_prices = [int(n) for n in numbers if 100 <= int(n) < 1000000]
+                            if valid_prices:
+                                price = max(valid_prices)
+                    
                     # 결과 추가
                     product = {
                         'brand_id': self.brand_id,
@@ -135,7 +179,7 @@ class CUCrawler:
                     }
                     
                     products.append(product)
-                    print(f"    ✓ {title} ({price}원)")
+                    print(f"    ✓ {title[:30]} ({price}원)")
                     
                 except Exception as e:
                     continue
@@ -156,7 +200,7 @@ class CUCrawler:
             for url, name in self.category_urls:
                 products = self.crawl_category(driver, url, name)
                 all_products.extend(products)
-                time.sleep(2)
+                time.sleep(3)
             
             return all_products
             
@@ -179,19 +223,30 @@ class CUCrawler:
         
         print(f"\n💾 DB 저장 시작... ({len(products)}개)")
         try:
-            thirty_days_ago = (datetime.now() - timedelta(days=30)).date().isoformat()
+            # 중복 제거 (같은 normalized_title)
+            seen = set()
+            unique_products = []
+            for p in products:
+                key = p['normalized_title'] + p['category']
+                if key not in seen:
+                    seen.add(key)
+                    unique_products.append(p)
             
-            # 기존 데이터 확인 안하고 그냥 저장 시도 (중복은 DB에서 처리하거나 무시)
-            # 간단하게 하기 위해 최근 데이터만 확인
+            print(f"  📦 중복 제거 후: {len(unique_products)}개")
             
-            self.supabase.table('new_products').upsert(products, on_conflict='normalized_title, launch_date').execute()
-            print(f"✅ 저장 완료!")
-            return len(products)
+            # 배치로 저장
+            self.supabase.table('new_products').upsert(
+                unique_products, 
+                on_conflict='normalized_title,launch_date'
+            ).execute()
+            
+            print(f"✅ {len(unique_products)}개 저장 완료!")
+            return len(unique_products)
                 
         except Exception as e:
-            # upsert 실패 시 개별 insert 시도
+            print(f"⚠️ Batch 저장 실패, 개별 저장 시도...")
             success_count = 0
-            for p in products:
+            for p in unique_products:
                 try:
                     self.supabase.table('new_products').insert(p).execute()
                     success_count += 1
