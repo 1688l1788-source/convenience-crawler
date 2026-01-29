@@ -30,155 +30,161 @@ class CUCrawler:
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
             'Accept-Language': 'ko-KR,ko;q=0.9,en;q=0.8',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Connection': 'keep-alive',
         }
         self.brand_id = 1
     
     def crawl(self):
         print("🏪 CU 크롤링 시작...")
         
-        # 여러 URL 시도
-        urls = [
-            "https://cu.bgfretail.com/event/plus.do",  # 기획전
-            "https://cu.bgfretail.com/product/product.do?category=product&depth2=6&sf=N",  # 신상품
-            "https://cu.bgfretail.com/product/product.do?category=product",  # 전체 상품
-        ]
+        url = "https://cu.bgfretail.com/product/product.do?category=product&depth2=6&sf=N"
         
-        all_products = []
-        
-        for url in urls:
-            try:
-                print(f"\n🔍 시도 중: {url}")
-                response = requests.get(url, headers=self.headers, timeout=30)
-                response.raise_for_status()
-                
-                print(f"✓ 응답 코드: {response.status_code}")
-                print(f"✓ 콘텐츠 길이: {len(response.content)} bytes")
-                
-                soup = BeautifulSoup(response.content, 'html.parser')
-                
-                # 여러 가능한 선택자 시도
-                selectors = [
-                    '.prodListWrap .prod_item',
-                    '.prod_list li',
-                    '.product-list .product-item',
-                    '.list_product li',
-                    'ul.prod_list > li',
-                    '.prod-list li',
-                    'div[class*="prod"] li',
-                    'article.prod_item',
-                ]
-                
-                items = []
-                for selector in selectors:
-                    items = soup.select(selector)
-                    if items:
-                        print(f"✓ 선택자 성공: {selector}")
-                        print(f"📦 발견된 상품: {len(items)}개")
-                        break
-                
-                if not items:
-                    print(f"✗ 상품을 찾지 못함")
-                    # HTML 구조 힌트 출력
-                    print("\n📝 HTML 구조 샘플:")
-                    print(soup.prettify()[:1000])
-                    continue
-                
-                products = self.parse_items(items, url)
-                all_products.extend(products)
-                
-                if len(all_products) >= 20:
-                    break
-                    
-            except Exception as e:
-                print(f"❌ URL 처리 실패: {e}")
-                continue
-        
-        print(f"\n📊 총 수집: {len(all_products)}개")
-        return all_products[:20]  # 최대 20개
+        try:
+            print(f"\n🔍 접속 중: {url}")
+            response = requests.get(url, headers=self.headers, timeout=30)
+            response.raise_for_status()
+            
+            print(f"✓ 응답 코드: {response.status_code}")
+            
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            # 선택자 시도
+            items = soup.select('div[class*="prod"] li')
+            print(f"📦 발견된 상품: {len(items)}개\n")
+            
+            if items:
+                # 첫 번째 상품의 HTML 구조 출력 (디버깅용)
+                print("="*60)
+                print("🔍 첫 번째 상품 HTML 구조:")
+                print("="*60)
+                print(items[0].prettify()[:2000])
+                print("="*60)
+                print()
+            
+            products = self.parse_items(items, url)
+            return products
+            
+        except Exception as e:
+            print(f"❌ 크롤링 실패: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
     
     def parse_items(self, items, base_url):
-        """제품 아이템 파싱"""
+        """제품 아이템 파싱 - 상세 디버깅"""
         products = []
         
-        for idx, item in enumerate(items[:20]):
+        for idx, item in enumerate(items[:5]):  # 처음 5개만
+            print(f"\n--- 상품 {idx+1} 파싱 시도 ---")
+            
             try:
-                # 여러 가능한 선택자로 시도
-                title_selectors = ['.prodName', '.prod_name', '.product-name', 
-                                   '.name', 'dt', 'h3', 'h4', '.title', 'strong']
+                # 모든 텍스트 출력
+                all_text = item.get_text(strip=True)
+                print(f"전체 텍스트: {all_text[:100]}")
+                
+                # 제품명 찾기 - 다양한 선택자 시도
                 title = None
-                for sel in title_selectors:
-                    elem = item.select_one(sel)
+                title_attempts = [
+                    ('강', item.select_one('strong')),
+                    ('이름', item.select_one('.prodName')),
+                    ('이름2', item.select_one('.prod_name')),
+                    ('이름3', item.select_one('.name')),
+                    ('dt', item.select_one('dt')),
+                    ('h3', item.select_one('h3')),
+                    ('a.title', item.select_one('a')
+.get('title') if item.select_one('a') else None),
+                ]
+                
+                for label, elem in title_attempts:
                     if elem:
-                        title = elem.text.strip()
-                        break
-                
-                if not title:
-                    # a 태그의 title 속성 확인
-                    a_tag = item.select_one('a')
-                    if a_tag and a_tag.get('title'):
-                        title = a_tag.get('title').strip()
-                
-                if not title or len(title) < 2:
-                    continue
-                
-                # 가격
-                price_selectors = ['.price', '.prod_price', '.product-price', '.val', 'dd']
-                price = None
-                for sel in price_selectors:
-                    elem = item.select_one(sel)
-                    if elem:
-                        price_text = elem.text.strip()
-                        price_match = re.findall(r'\d+', price_text.replace(',', ''))
-                        if price_match:
-                            price = int(''.join(price_match))
+                        if isinstance(elem, str):
+                            title = elem
+                        else:
+                            title = elem.text.strip()
+                        if title and len(title) > 2:
+                            print(f"✓ 제품명 발견 ({label}): {title}")
                             break
                 
-                # 이미지
-                img_elem = item.select_one('img')
+                if not title:
+                    # 텍스트 전체에서 추출 시도
+                    lines = [line.strip() for line in all_text.split('\n') if line.strip()]
+                    if lines:
+                        title = lines[0]
+                        print(f"⚠ 제품명 추측: {title}")
+                
+                # 가격 찾기
+                price = None
+                price_text = None
+                
+                price_elems = [
+                    item.select_one('.price'),
+                    item.select_one('dd'),
+                    item.select_one('.val'),
+                ]
+                
+                for elem in price_elems:
+                    if elem:
+                        price_text = elem.text.strip()
+                        break
+                
+                if not price_text:
+                    # 숫자가 포함된 텍스트 찾기
+                    import re
+                    numbers = re.findall(r'\d{1,3}(?:,\d{3})*', all_text)
+                    if numbers:
+                        price_text = numbers[0]
+                
+                if price_text:
+                    price_match = re.findall(r'\d+', price_text.replace(',', ''))
+                    if price_match:
+                        price = int(''.join(price_match))
+                        print(f"✓ 가격 발견: {price}원 (원본: {price_text})")
+                
+                # 이미지 찾기
+                img = item.select_one('img')
                 image_url = None
-                if img_elem:
-                    image_url = img_elem.get('src') or img_elem.get('data-src') or img_elem.get('data-original')
-                    if image_url:
-                        if not image_url.startswith('http'):
-                            if image_url.startswith('//'):
-                                image_url = 'https:' + image_url
-                            elif image_url.startswith('/'):
-                                image_url = 'https://cu.bgfretail.com' + image_url
-                            else:
-                                image_url = 'https://cu.bgfretail.com/' + image_url
+                if img:
+                    image_url = img.get('src') or img.get('data-src')
+                    if image_url and not image_url.startswith('http'):
+                        if image_url.startswith('//'):
+                            image_url = 'https:' + image_url
+                        elif image_url.startswith('/'):
+                            image_url = 'https://cu.bgfretail.com' + image_url
+                    print(f"✓ 이미지: {image_url[:50]}...")
                 
-                # 링크
-                link_elem = item.select_one('a')
+                # 링크 찾기
+                link = item.select_one('a')
                 source_url = base_url
-                if link_elem:
-                    href = link_elem.get('href')
-                    if href:
-                        if href.startswith('http'):
-                            source_url = href
-                        elif href.startswith('/'):
-                            source_url = 'https://cu.bgfretail.com' + href
+                if link and link.get('href'):
+                    href = link.get('href')
+                    if href.startswith('http'):
+                        source_url = href
+                    elif href.startswith('/'):
+                        source_url = 'https://cu.bgfretail.com' + href
                 
-                product = {
-                    'brand_id': self.brand_id,
-                    'title': title,
-                    'normalized_title': self.normalize_title(title),
-                    'price': price,
-                    'category': self.categorize(title),
-                    'launch_date': datetime.now().date().isoformat(),
-                    'image_url': image_url,
-                    'source_url': source_url,
-                    'is_active': True
-                }
-                
-                products.append(product)
-                print(f"  ✓ {idx+1}. {title[:40]}...")
+                # 제품 데이터 생성
+                if title and len(title) > 2:
+                    product = {
+                        'brand_id': self.brand_id,
+                        'title': title,
+                        'normalized_title': self.normalize_title(title),
+                        'price': price,
+                        'category': self.categorize(title),
+                        'launch_date': datetime.now().date().isoformat(),
+                        'image_url': image_url,
+                        'source_url': source_url,
+                        'is_active': True
+                    }
+                    products.append(product)
+                    print(f"✅ 파싱 성공: {title[:40]}")
+                else:
+                    print(f"❌ 제품명을 찾을 수 없음")
                 
             except Exception as e:
-                print(f"  ✗ 상품 파싱 실패: {e}")
-                continue
+                print(f"❌ 파싱 오류: {e}")
+                import traceback
+                traceback.print_exc()
         
+        print(f"\n📊 최종 파싱 성공: {len(products)}개")
         return products
     
     def normalize_title(self, title):
@@ -191,7 +197,7 @@ class CUCrawler:
         keywords = {
             '음료': ['음료', '주스', '커피', '우유', '차', '워터', '사이다', '콜라', '에이드'],
             '과자': ['과자', '초콜릿', '사탕', '젤리', '쿠키', '비스킷', '스낵', '칩'],
-            '즉석식품': ['도시락', '김밥', '샌드위치', '삼각김밥', '핫도그', '햄버거', '버거'],
+            '즉석식품': ['도시락', '김밥', '샌드위치', '삼각김밥', '핫도그', '햄버거'],
             '라면': ['라면', '컵라면', '짜파게티', '짜장면', '볶음면'],
             '아이스크림': ['아이스크림', '빙과', '아이스바', '콘', '파인트']
         }
@@ -245,7 +251,7 @@ class CUCrawler:
 
 def main():
     print("="*60)
-    print("🏪 편의점 신제품 크롤러 시작")
+    print("🏪 편의점 신제품 크롤러 시작 (디버그 모드)")
     print(f"⏰ 실행 시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("="*60)
     
