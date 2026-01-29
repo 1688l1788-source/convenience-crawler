@@ -41,8 +41,8 @@ def main():
                 "pageIndex": page,
                 "searchMainCategory": cat_code,
                 "searchSubCategory": "",
-                "listType": 0,  # ✅ 0으로 설정
-                "searchCondition": "setC",  # ✅ setC로 설정
+                "listType": 0,
+                "searchCondition": "setC",
                 "searchUseYn": "N",
                 "codeParent": cat_code
             }
@@ -74,7 +74,6 @@ def main():
                     if first_title:
                         print(f"    🔝 페이지 1 첫 제품: {first_title.text.strip()}")
 
-                # ✅ 정순으로 처리 (reversed 사용 안 함)
                 for item in items:
                     try:
                         # 1. 제품명
@@ -145,15 +144,17 @@ def main():
             except Exception as e:
                 print(f"❌ 페이지 요청 에러: {e}")
 
-    # 3. DB 저장 (✅ 정순으로 저장)
+    # 3. DB 저장 (✅ 역순으로 저장하여 찰옥수수가 가장 큰 ID를 받도록)
     print(f"\n💾 Supabase에 저장 중... (총 {len(all_products)}개)")
     count = 0
     
     if all_products:
-        print(f"  🔝 첫 저장 (가장 작은 ID): {all_products[0]['title']}")
-        print(f"  🔚 마지막 저장 (가장 큰 ID): {all_products[-1]['title']}")
+        print(f"  🔝 첫 크롤링: {all_products[0]['title']}")
+        print(f"  🔚 마지막 크롤링: {all_products[-1]['title']}")
+        print(f"  ⚙️  역순으로 저장하여 '{all_products[0]['title']}'이 가장 큰 ID를 받습니다.")
     
-    for product in all_products:
+    # ✅ 역순으로 저장
+    for product in reversed(all_products):
         try:
             supabase.table("new_products").insert(product).execute()
             count += 1
@@ -163,7 +164,7 @@ def main():
             print(f"  ⚠️ 저장 실패 ({product['title']}): {e}")
 
     print(f"\n🎉 완료! 총 {count}개 제품이 업데이트되었습니다.")
-    print(f"💡 앱에서 ID DESC 정렬 시 '{all_products[-1]['title']}'이 맨 위에 표시됩니다.")
+    print(f"💡 앱에서 ID DESC 정렬 시 '{all_products[0]['title']}'이 맨 위에 표시됩니다.")
 
 if __name__ == "__main__":
     main()
