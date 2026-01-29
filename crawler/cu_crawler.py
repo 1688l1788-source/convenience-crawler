@@ -9,7 +9,7 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY")
 
 MAX_PRODUCTS = 50
-MAX_PAGES = 10  # 50개 채울 때까지 돌고, 다 채우면 중단
+MAX_PAGES = 10
 
 def parse_product(item):
     name_tag = item.select_one(".name p")
@@ -47,7 +47,7 @@ def parse_product(item):
         "title": title,
         "price": price,
         "image_url": image_url,
-        "category": "아이스크림",   # ✅ 무조건 고정 (필터 누락 방지)
+        "category": "아이스크림",
         "promotion_type": promotion_type,
         "source_url": product_url,
         "is_active": True,
@@ -63,7 +63,7 @@ def crawl_icecream():
         url = "https://cu.bgfretail.com/product/productAjax.do"
         payload = {
             "pageIndex": page,
-            "searchMainCategory": "40",  # 아이스크림
+            "searchMainCategory": "40",
             "listType": 0,
         }
         headers = {
@@ -100,18 +100,15 @@ def main():
 
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-    # ✅ 가장 빠른 정상화: CU(brand_id=1) 전체 삭제 후 아이스크림만 재삽입
-    # (필터 누락 원인인 '카테고리 값 다른 기존 데이터'를 한 번에 제거)
+    # CU 전체 삭제
     supabase.table("new_products").delete().eq("brand_id", 1).execute()
 
     products = crawl_icecream()
 
-    # ✅ 최신순 보장(앱이 id DESC로 정렬할 때):
-    # CU 페이지가 '최신이 앞'으로 내려오는 경우가 많아서,
-    # DB에는 "오래된 것 먼저 → 최신을 마지막"으로 넣어야 id가 최신이 가장 큼.
-    products_to_insert = list(reversed(products))
+    # ✅ reversed() 제거 - 그냥 순서대로 저장
+    # 페이지 1(최신) → id 작음 → ORDER BY id DESC에서 먼저 나옴
+    products_to_insert = products
 
-    # ✅ 한번에 넣다가 실패하면(유니크 충돌 등) 청크로 넣음
     if products_to_insert:
         try:
             supabase.table("new_products").insert(products_to_insert).execute()
