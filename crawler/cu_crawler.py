@@ -13,8 +13,14 @@ TARGET_CATEGORIES = {'40': '아이스크림'}
 MAX_PAGES = 2
 MAX_PRODUCTS = 50
 
+# ✅ 정확한 키워드로 수정
 CATEGORY_KEYWORDS = {
-    '아이스크림': ['아이스', '아이스크림', '콘', '바', '빙과', '소르베', '젤라또', '하드', '투게더'],
+    '아이스크림': [
+        '아이스크림', '아이스', '빙과', '소르베', '젤라또',
+        '샤벳', '요거트바', '요구르트바', '빙수', '스쿱',
+        '파인트', '파르페', '붕어싸만코', '하겐', '배스킨',
+        '미니컵', '그릭요거', '우유미니컵', '투게더'
+    ],
 }
 
 def crawl_general_products(cat_code, cat_name):
@@ -117,13 +123,30 @@ def filter_pb_by_keywords(all_pb_products, category_name):
     if not keywords:
         return []
     
+    # ✅ 제외 키워드 (아이스크림이 아닌 것들)
+    exclude_keywords = ['고로케', '핫바', '떡', '만두', '김밥', '도시락', 
+                        '샌드위치', '햄', '소시지', '라면', '핫도그', '치킨']
+    
     filtered = []
     for product in all_pb_products:
         title = product.get('title', '').lower()
+        
+        # 제외 키워드 체크
+        if any(ex in title for ex in exclude_keywords):
+            continue
+        
+        # 포함 키워드 체크
         if any(keyword in title for keyword in keywords):
-            # ✅ 새 딕셔너리로 복사하고 category 설정
-            filtered_product = product.copy()
-            filtered_product['category'] = category_name
+            filtered_product = {
+                "title": product.get("title"),
+                "price": product.get("price"),
+                "image_url": product.get("image_url"),
+                "category": category_name,
+                "promotion_type": product.get("promotion_type"),
+                "source_url": product.get("source_url"),
+                "is_active": product.get("is_active", True),
+                "brand_id": product.get("brand_id", 1)
+            }
             filtered.append(filtered_product)
     
     return filtered
@@ -184,40 +207,31 @@ def main():
 
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
     
-    # 1. PB 상품 전체 크롤링
     all_pb_products = crawl_all_pb_products()
-    
     total_count = 0
 
-    # 2. 카테고리별 처리
     for cat_code, cat_name in TARGET_CATEGORIES.items():
         print(f"📂 [{cat_name}] 처리 시작...")
         
-        # 기존 데이터 삭제
         try:
             supabase.table("new_products").delete().eq("category", cat_name).execute()
             print(f"  🗑️  기존 {cat_name} 데이터 삭제")
         except Exception as e:
             print(f"  ⚠️ 삭제 에러: {e}")
         
-        # 일반 상품
         general_items = crawl_general_products(cat_code, cat_name)
         
-        # PB 상품 필터링
         print(f"  🔍 PB {cat_name} 필터링 중...")
         pb_items = filter_pb_by_keywords(all_pb_products, cat_name)
         print(f"    ✅ PB {len(pb_items)}개 발견")
         
-        # ✅ 디버깅: PB 샘플 확인
         if pb_items:
             print(f"  📝 PB 샘플 (처음 3개):")
             for i, p in enumerate(pb_items[:3], 1):
                 print(f"    {i}. {p.get('title')} | category={p.get('category')}")
         
-        # 합치기
         all_items = general_items + pb_items
         
-        # 저장
         print(f"  💾 저장 중... (일반 {len(general_items)} + PB {len(pb_items)} = {len(all_items)}개)")
         
         saved_count = 0
