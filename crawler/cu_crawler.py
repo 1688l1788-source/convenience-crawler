@@ -9,19 +9,12 @@ import re
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY")
 
-TARGET_CATEGORIES = {'40': '아이스크림'}  # 테스트용
+TARGET_CATEGORIES = {'40': '아이스크림'}
 MAX_PAGES = 2
 MAX_PRODUCTS = 50
 
-# ✅ 카테고리별 키워드 매핑
 CATEGORY_KEYWORDS = {
     '아이스크림': ['아이스', '아이스크림', '콘', '바', '빙과', '소르베', '젤라또', '하드', '투게더'],
-    '과자': ['과자', '스낵', '칩', '쿠키', '비스킷', '크래커', '웨하스'],
-    '음료': ['음료', '주스', '커피', '차', '워터', '탄산', '이온'],
-    '간편식사': ['도시락', '김밥', '샌드위치', '삼각', '주먹밥'],
-    '즉석조리': ['컵라면', '라면', '우동', '국수', '떡볶이'],
-    '식품': ['식품', '햄', '소시지', '어묵', '치즈', '계란'],
-    '생활용품': ['생활', '휴지', '세제', '샴푸', '칫솔', '비누']
 }
 
 def crawl_general_products(cat_code, cat_name):
@@ -73,7 +66,7 @@ def crawl_general_products(cat_code, cat_name):
 
 
 def crawl_all_pb_products():
-    """PB 상품 전체 크롤링 (1회만 실행)"""
+    """PB 상품 전체 크롤링"""
     print(f"\n🏪 PB 전체 상품 크롤링 시작...")
     products = []
     
@@ -128,8 +121,10 @@ def filter_pb_by_keywords(all_pb_products, category_name):
     for product in all_pb_products:
         title = product.get('title', '').lower()
         if any(keyword in title for keyword in keywords):
-            product['category'] = category_name
-            filtered.append(product)
+            # ✅ 새 딕셔너리로 복사하고 category 설정
+            filtered_product = product.copy()
+            filtered_product['category'] = category_name
+            filtered.append(filtered_product)
     
     return filtered
 
@@ -189,12 +184,12 @@ def main():
 
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
     
-    # ✅ 1. PB 상품 전체 크롤링 (1회만)
+    # 1. PB 상품 전체 크롤링
     all_pb_products = crawl_all_pb_products()
     
     total_count = 0
 
-    # ✅ 2. 카테고리별 처리
+    # 2. 카테고리별 처리
     for cat_code, cat_name in TARGET_CATEGORIES.items():
         print(f"📂 [{cat_name}] 처리 시작...")
         
@@ -212,6 +207,12 @@ def main():
         print(f"  🔍 PB {cat_name} 필터링 중...")
         pb_items = filter_pb_by_keywords(all_pb_products, cat_name)
         print(f"    ✅ PB {len(pb_items)}개 발견")
+        
+        # ✅ 디버깅: PB 샘플 확인
+        if pb_items:
+            print(f"  📝 PB 샘플 (처음 3개):")
+            for i, p in enumerate(pb_items[:3], 1):
+                print(f"    {i}. {p.get('title')} | category={p.get('category')}")
         
         # 합치기
         all_items = general_items + pb_items
