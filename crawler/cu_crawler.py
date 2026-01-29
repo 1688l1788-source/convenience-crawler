@@ -24,7 +24,7 @@ def crawl_general_icecream():
         url = "https://cu.bgfretail.com/product/productAjax.do"
         payload = {
             "pageIndex": page,
-            "searchMainCategory": "40",  # ✅ 수정!
+            "searchMainCategory": "40",
             "listType": 0,
         }
         headers = {
@@ -127,9 +127,9 @@ def main():
     
     print(f"💾 저장 시작... (총 {len(all_items)}개)\n")
     
-    # 저장
+    # 저장 (reversed 제거)
     saved_count = 0
-    for product in reversed(all_items):
+    for product in all_items:
         if not product: continue
         try:
             supabase.table("new_products").insert(product).execute()
