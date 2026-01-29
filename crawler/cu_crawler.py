@@ -9,14 +9,24 @@ import re
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY")
 
-# 10단위 추측 (아이스크림: 40)
-TARGET_CATEGORIES = {'40': '아이스크림'}
+TARGET_CATEGORIES = {'40': '아이스크림'}  # 테스트용
 MAX_PAGES = 2
 MAX_PRODUCTS = 50
 
+# ✅ 카테고리별 키워드 매핑
+CATEGORY_KEYWORDS = {
+    '아이스크림': ['아이스', '아이스크림', '콘', '바', '빙과', '소르베', '젤라또', '하드', '투게더'],
+    '과자': ['과자', '스낵', '칩', '쿠키', '비스킷', '크래커', '웨하스'],
+    '음료': ['음료', '주스', '커피', '차', '워터', '탄산', '이온'],
+    '간편식사': ['도시락', '김밥', '샌드위치', '삼각', '주먹밥'],
+    '즉석조리': ['컵라면', '라면', '우동', '국수', '떡볶이'],
+    '식품': ['식품', '햄', '소시지', '어묵', '치즈', '계란'],
+    '생활용품': ['생활', '휴지', '세제', '샴푸', '칫솔', '비누']
+}
+
 def crawl_general_products(cat_code, cat_name):
-    """일반 상품 크롤링 (productAjax.do)"""
-    print(f"  🛒 일반 {cat_name} 검색 중...")
+    """일반 상품 크롤링"""
+    print(f"  🛒 일반 {cat_name} 크롤링 중...")
     products = []
     
     for page in range(1, MAX_PAGES + 1):
@@ -49,26 +59,25 @@ def crawl_general_products(cat_code, cat_name):
 
             for item in items:
                 if len(products) >= MAX_PRODUCTS: break
-                products.append(parse_product(item, cat_name, "일반"))
+                product = parse_product(item, cat_name)
+                if product:
+                    products.append(product)
             
             time.sleep(0.5)
 
         except Exception as e:
-            print(f"    ❌ 일반 상품 요청 에러: {e}")
+            print(f"    ❌ 요청 에러: {e}")
     
     print(f"    ✅ 일반 {len(products)}개 발견")
     return products
 
 
-def crawl_pb_products_by_category(cat_code, cat_name):
-    """PB 상품 크롤링 (pbAjax.do) - 카테고리 필터 적용"""
-    print(f"  🏪 PB {cat_name} 검색 중...")
+def crawl_all_pb_products():
+    """PB 상품 전체 크롤링 (1회만 실행)"""
+    print(f"\n🏪 PB 전체 상품 크롤링 시작...")
     products = []
     
-    for page in range(1, MAX_PAGES + 1):
-        if len(products) >= MAX_PRODUCTS:
-            break
-            
+    for page in range(1, 10):
         url = "https://cu.bgfretail.com/product/pbAjax.do"
         payload = {
             "pageIndex": page,
@@ -77,7 +86,6 @@ def crawl_pb_products_by_category(cat_code, cat_name):
             "searchUseYn": "",
             "gdIdx": "0",
             "searchgubun": "CUG",
-            "searchMainCategory": cat_code,  # ✅ PB에도 카테고리 필터 적용 시도
             "search1": "",
             "search2": "",
             "searchKeyword": ""
@@ -97,20 +105,36 @@ def crawl_pb_products_by_category(cat_code, cat_name):
                 break
 
             for item in items:
-                if len(products) >= MAX_PRODUCTS: break
-                # ✅ 저장할 때 '아이스크림' 카테고리로 저장 (PB상품 X)
-                products.append(parse_product(item, cat_name, "PB"))
+                product = parse_product(item, None)
+                if product:
+                    products.append(product)
             
             time.sleep(0.5)
 
         except Exception as e:
-            print(f"    ❌ PB 상품 요청 에러: {e}")
+            print(f"    ❌ PB 요청 에러: {e}")
     
-    print(f"    ✅ PB {len(products)}개 발견")
+    print(f"  ✅ PB 전체 {len(products)}개 크롤링 완료\n")
     return products
 
 
-def parse_product(item, category_name, source_type):
+def filter_pb_by_keywords(all_pb_products, category_name):
+    """카테고리별 키워드로 PB 상품 필터링"""
+    keywords = CATEGORY_KEYWORDS.get(category_name, [])
+    if not keywords:
+        return []
+    
+    filtered = []
+    for product in all_pb_products:
+        title = product.get('title', '').lower()
+        if any(keyword in title for keyword in keywords):
+            product['category'] = category_name
+            filtered.append(product)
+    
+    return filtered
+
+
+def parse_product(item, category_name):
     """공통 파싱 함수"""
     try:
         name_tag = item.select_one(".name p")
@@ -145,7 +169,7 @@ def parse_product(item, category_name, source_type):
             "title": title,
             "price": price,
             "image_url": image_url,
-            "category": category_name,  # ✅ "아이스크림"으로 통일
+            "category": category_name,
             "promotion_type": promotion_type,
             "source_url": product_url,
             "is_active": True,
@@ -155,8 +179,9 @@ def parse_product(item, category_name, source_type):
         print(f"    ⚠️ 파싱 에러: {e}")
         return None
 
+
 def main():
-    print("🚀 CU 크롤러 시작 (통합 모드)")
+    print("🚀 CU 크롤러 시작 (일반 + PB 통합)")
 
     if not SUPABASE_URL or not SUPABASE_KEY:
         print("❌ 에러: Supabase 환경 변수가 없습니다.")
@@ -164,33 +189,38 @@ def main():
 
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
     
-    # 기존 데이터 삭제 (아이스크림만)
-    print("🗑️ 기존 아이스크림 데이터 삭제 중...")
-    try:
-        supabase.table("new_products").delete().eq("category", "아이스크림").execute()
-    except Exception as e:
-        print(f"⚠️ 삭제 중 오류: {e}")
-
+    # ✅ 1. PB 상품 전체 크롤링 (1회만)
+    all_pb_products = crawl_all_pb_products()
+    
     total_count = 0
 
-    # 카테고리별 반복
+    # ✅ 2. 카테고리별 처리
     for cat_code, cat_name in TARGET_CATEGORIES.items():
-        print(f"\n📂 [{cat_name}] 크롤링 시작...")
+        print(f"📂 [{cat_name}] 처리 시작...")
         
-        # 1. 일반 상품 가져오기
+        # 기존 데이터 삭제
+        try:
+            supabase.table("new_products").delete().eq("category", cat_name).execute()
+            print(f"  🗑️  기존 {cat_name} 데이터 삭제")
+        except Exception as e:
+            print(f"  ⚠️ 삭제 에러: {e}")
+        
+        # 일반 상품
         general_items = crawl_general_products(cat_code, cat_name)
         
-        # 2. PB 상품 가져오기 (카테고리 필터 적용)
-        pb_items = crawl_pb_products_by_category(cat_code, cat_name)
+        # PB 상품 필터링
+        print(f"  🔍 PB {cat_name} 필터링 중...")
+        pb_items = filter_pb_by_keywords(all_pb_products, cat_name)
+        print(f"    ✅ PB {len(pb_items)}개 발견")
         
-        # 3. 합치기
+        # 합치기
         all_items = general_items + pb_items
         
-        # 4. 저장
-        print(f"  💾 저장 중... (일반 {len(general_items)} + PB {len(pb_items)} = 총 {len(all_items)}개)")
+        # 저장
+        print(f"  💾 저장 중... (일반 {len(general_items)} + PB {len(pb_items)} = {len(all_items)}개)")
         
         saved_count = 0
-        for product in reversed(all_items): # ID 순서 유지를 위해 역순
+        for product in reversed(all_items):
             if not product: continue
             try:
                 supabase.table("new_products").insert(product).execute()
@@ -199,9 +229,9 @@ def main():
                 print(f"  ⚠️ 저장 실패: {e}")
         
         total_count += saved_count
-        print(f"  🎉 {cat_name} 저장 완료: {saved_count}개")
+        print(f"  ✅ {cat_name} 완료: {saved_count}개 저장\n")
 
-    print(f"\n✅ 전체 작업 완료! 총 {total_count}개 상품 업데이트됨.")
+    print(f"🎉 전체 완료! 총 {total_count}개 상품 업데이트")
 
 if __name__ == "__main__":
     main()
