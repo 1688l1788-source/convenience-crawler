@@ -12,9 +12,9 @@ SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY")
 MAX_PAGES = 10
 MAX_PRODUCTS = 200
 
-def crawl_category(category_id, category_name):
-    """카테고리별 크롤링"""
-    print(f"🛒 {category_name} 크롤링 중...")
+def crawl_icecream():
+    """아이스크림 크롤링"""
+    print("🛒 아이스크림 크롤링 중...")
     products = []
     
     for page in range(1, MAX_PAGES + 1):
@@ -24,7 +24,7 @@ def crawl_category(category_id, category_name):
         url = "https://cu.bgfretail.com/product/productAjax.do"
         payload = {
             "pageIndex": page,
-            "searchMainCategory": category_id,
+            "searchMainCategory": "40",
             "listType": 0,
         }
         headers = {
@@ -46,7 +46,7 @@ def crawl_category(category_id, category_name):
 
             for item in items:
                 if len(products) >= MAX_PRODUCTS: break
-                product = parse_product(item, category_name)
+                product = parse_product(item, "아이스크림")
                 if product:
                     products.append(product)
             
@@ -55,7 +55,7 @@ def crawl_category(category_id, category_name):
         except Exception as e:
             print(f"  ❌ 페이지 {page} 요청 에러: {e}")
     
-    print(f"✅ {category_name} {len(products)}개 크롤링 완료\n")
+    print(f"✅ 아이스크림 {len(products)}개 크롤링 완료\n")
     return products
 
 
@@ -106,7 +106,7 @@ def parse_product(item, category_name):
 
 
 def main():
-    print("🚀 CU 크롤러 시작\n")
+    print("🚀 CU 아이스크림 크롤러 시작\n")
 
     if not SUPABASE_URL or not SUPABASE_KEY:
         print("❌ 에러: Supabase 환경 변수가 없습니다.")
@@ -114,46 +114,30 @@ def main():
 
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
     
-    # ✅ CU 전체 데이터 삭제 (brand_id=1)
-    print("🗑️  기존 CU 데이터 전체 삭제 중...")
+    # 아이스크림만 삭제
+    print("🗑️  기존 아이스크림 데이터 삭제 중...")
     try:
-        # brand_id=1인 모든 데이터 삭제
-        result = supabase.table("new_products").delete().eq("brand_id", 1).execute()
+        result = supabase.table("new_products").delete().eq("brand_id", 1).eq("category", "아이스크림").execute()
         print(f"✅ 삭제 완료\n")
     except Exception as e:
         print(f"⚠️ 삭제 에러: {e}\n")
     
-    # 크롤링할 카테고리 정의
-    categories = [
-        ("40", "아이스크림"),
-        ("30", "과자"),
-        ("60", "음료"),
-        ("10", "식품"),
-        ("50", "생활용품"),
-    ]
+    # 아이스크림 크롤링
+    products = crawl_icecream()
     
-    all_products = []
+    print(f"💾 저장 시작... (총 {len(products)}개)\n")
     
-    # 각 카테고리 크롤링
-    for category_id, category_name in categories:
-        products = crawl_category(category_id, category_name)
-        all_products.extend(products)
-    
-    print(f"💾 저장 시작... (총 {len(all_products)}개)\n")
-    
-    # ✅ 그냥 순서대로 저장 (reversed 제거)
+    # 그냥 순서대로 저장
     saved_count = 0
-    for product in all_products:
+    for product in products:
         if not product: continue
         try:
             supabase.table("new_products").insert(product).execute()
             saved_count += 1
-            if saved_count % 50 == 0:
-                print(f"  {saved_count}개 저장 중...")
         except Exception as e:
             print(f"⚠️ 저장 실패: {product.get('title', 'Unknown')} - {e}")
     
-    print(f"\n✅ 저장 완료: {saved_count}개")
+    print(f"\n✅ 아이스크림 저장 완료: {saved_count}개")
     print(f"🎉 크롤링 완료!")
 
 if __name__ == "__main__":
