@@ -127,9 +127,9 @@ def main():
     
     print(f"💾 저장 시작... (총 {len(all_items)}개)\n")
     
-    # 저장 (reversed 제거)
+    # ✅ reversed() 추가 - 최신순 정렬
     saved_count = 0
-    for product in all_items:
+    for product in reversed(all_items):
         if not product: continue
         try:
             supabase.table("new_products").insert(product).execute()
