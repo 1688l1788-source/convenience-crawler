@@ -178,11 +178,11 @@ def main():
 
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
     
-    # 기존 아이스크림 데이터 삭제
+    # ✅ 기존 아이스크림 데이터 삭제
     print("🗑️  기존 아이스크림 데이터 삭제 중...")
     try:
-        supabase.table("new_products").delete().eq("category", "아이스크림").execute()
-        print("✅ 삭제 완료\n")
+        result = supabase.table("new_products").delete().eq("category", "아이스크림").execute()
+        print(f"✅ 삭제 완료\n")
     except Exception as e:
         print(f"⚠️ 삭제 에러: {e}\n")
     
