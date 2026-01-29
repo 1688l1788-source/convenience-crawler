@@ -8,9 +8,7 @@ from supabase import create_client
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY")
 
-# 안전장치: 최대 50페이지까지 탐색 (보통 20~30페이지면 끝남)
-MAX_SEARCH_PAGES = 50 
-TARGET_COUNT = 50  # 최종적으로 저장할 최신 상품 개수
+MAX_SEARCH_PAGES = 100  # 충분히 크게 (전체 스캔용)
 
 def parse_product(item):
     try:
@@ -34,17 +32,16 @@ def parse_product(item):
         promotion_type = badge_tag.get_text(strip=True) if badge_tag else None
 
         product_url = "https://cu.bgfretail.com/product/view.do?category=product"
+        gdIdx = None
         onclick_div = item.select_one("div[onclick*='view']")
         if onclick_div:
             onclick = onclick_div.get("onclick", "")
             m = re.search(r"view\s*\(\s*(\d+)\s*\)", onclick)
             if m:
-                gdIdx = m.group(1)
+                gdIdx = int(m.group(1)) # 숫자형으로 저장
                 product_url = f"https://cu.bgfretail.com/product/view.do?gdIdx={gdIdx}&category=product"
         
-        # 제목이 없으면 스킵
-        if not title:
-            return None
+        if not title: return None
 
         return {
             "title": title,
@@ -54,99 +51,100 @@ def parse_product(item):
             "promotion_type": promotion_type,
             "source_url": product_url,
             "is_active": True,
-            "brand_id": 1
+            "brand_id": 1,
+            "external_id": gdIdx  # ✅ 중복 체크용 고유 ID
         }
     except Exception:
         return None
-
-def fetch_all_icecream():
-    all_products = []
-    print("🔄 전체 페이지 스캔 시작 (끝까지 찾기)...")
-    
-    for page in range(1, MAX_SEARCH_PAGES + 1):
-        url = "https://cu.bgfretail.com/product/productAjax.do"
-        payload = {
-            "pageIndex": page,
-            "searchMainCategory": "40",
-            "listType": 0,
-            "searchCondition": "",
-        }
-        headers = {
-            "User-Agent": "Mozilla/5.0",
-            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-        }
-
-        try:
-            r = requests.post(url, data=payload, headers=headers, timeout=5)
-            r.encoding = "utf-8"
-            soup = BeautifulSoup(r.text, "html.parser")
-            items = soup.select("li.prod_list")
-
-            if not items:
-                print(f"  🛑 페이지 {page}: 데이터 없음. 여기가 끝!")
-                break
-            
-            # 페이지 내 상품 수집
-            page_products = []
-            for item in items:
-                p = parse_product(item)
-                if p:
-                    page_products.append(p)
-            
-            all_products.extend(page_products)
-            print(f"  ✅ 페이지 {page}: {len(page_products)}개 수집 (누적 {len(all_products)}개)")
-            
-            time.sleep(0.1) # 빠르게
-            
-        except Exception as e:
-            print(f"  ❌ 페이지 {page} 에러: {e}")
-            break
-            
-    return all_products
-
-def chunk(lst, size):
-    for i in range(0, len(lst), size):
-        yield lst[i:i+size]
 
 def main():
     if not SUPABASE_URL or not SUPABASE_KEY:
         raise RuntimeError("환경변수 없음")
 
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-    # 1. 기존 데이터 삭제
-    supabase.table("new_products").delete().eq("brand_id", 1).execute()
-
-    # 2. 전체 크롤링 (페이지 1부터 끝까지)
-    # 리스트 순서: [오래된 상품(1페이지) ..... 최신 상품(마지막페이지)]
-    full_list = fetch_all_icecream()
-
-    if not full_list:
-        print("❌ 수집된 데이터가 없습니다.")
-        return
-
-    # 3. 마지막 50개만 자르기 (이게 진짜 최신 상품들)
-    # 뒤에서 50개 슬라이싱
-    latest_products = full_list[-TARGET_COUNT:]
     
-    print(f"\n✂️ 전체 {len(full_list)}개 중 최신 {len(latest_products)}개만 선택함.")
-    print(f"   - 최신 1위 예상: {latest_products[-1]['title']}")
-    print(f"   - 최신 2위 예상: {latest_products[-2]['title']}")
+    # 1. DB에 있는 가장 최신 external_id(gdIdx) 조회
+    # (이 번호보다 큰 것만 새로 추가하면 됨)
+    try:
+        last_item = supabase.table("new_products") \
+            .select("external_id") \
+            .eq("brand_id", 1) \
+            .order("external_id", desc=True) \
+            .limit(1) \
+            .execute()
+        
+        max_gdIdx = last_item.data[0]['external_id'] if last_item.data else 0
+        print(f"📊 현재 DB 마지막 상품 번호: {max_gdIdx}")
+    except Exception:
+        max_gdIdx = 0
 
-    # 4. 저장
-    # latest_products 리스트는 [덜 최신 -> 더 최신 -> 가장 최신] 순서임
-    # 이대로 insert하면 ID가 순서대로 부여됨 (1 -> 2 -> ... -> 50)
-    # 가장 최신이 ID 50이 됨.
-    # 앱에서 ORDER BY id DESC 하면 ID 50(가장 최신)이 맨 위에 나옴. ✅ 정답!
+    new_products = []
     
-    if latest_products:
+    # 2. 전체 페이지 스캔 (페이지 1부터 끝까지 가면서 데이터 수집)
+    # CU는 페이지 1이 가장 오래된 것 -> 뒤로 갈수록 최신
+    # 따라서 페이지 1부터 쭉 훑으면서 max_gdIdx보다 큰 것만 담으면 됨.
+    # 만약 DB가 비어있으면(max_gdIdx=0) 전체가 다 담김.
+    
+    print("🔄 업데이트 스캔 시작...")
+    
+    for page in range(1, MAX_SEARCH_PAGES + 1):
+        url = "https://cu.bgfretail.com/product/productAjax.do"
+        payload = {"pageIndex": page, "searchMainCategory": "40", "listType": 0}
+        headers = {"User-Agent": "Mozilla/5.0", "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"}
+
         try:
-            supabase.table("new_products").insert(latest_products).execute()
-        except Exception:
-            for part in chunk(latest_products, 50): # 50개 한번에
-                supabase.table("new_products").insert(part).execute()
+            r = requests.post(url, data=payload, headers=headers, timeout=5)
+            soup = BeautifulSoup(r.text, "html.parser")
+            items = soup.select("li.prod_list")
 
-    print(f"\n🎉 저장 완료! 앱에서 확인해보세요.")
+            if not items:
+                print(f"  🛑 페이지 {page}: 끝!")
+                break
+            
+            count_in_page = 0
+            for item in items:
+                p = parse_product(item)
+                if p and p['external_id']:
+                    # 이미 있는 상품(번호가 작거나 같음)은 스킵? 
+                    # 아니면 가격 변동 업데이트를 위해 덮어쓰기?
+                    # "서버 부하 적게"가 목표라면 스킵이 맞음.
+                    # 하지만 CU 구조상 뒤페이지에 새 상품이 나오므로, 일단 다 훑어야 함.
+                    
+                    if p['external_id'] > max_gdIdx:
+                        new_products.append(p)
+                        count_in_page += 1
+            
+            # 진행 상황 출력
+            if count_in_page > 0:
+                print(f"  ✅ 페이지 {page}: 신상품 {count_in_page}개 발견")
+            else:
+                # 이 페이지에 신상품이 하나도 없다면?
+                # CU 구조상: 앞 페이지(1, 2..)는 옛날 상품이므로 신상품이 없을 수 있음.
+                # 계속 뒤로 가야 함.
+                print(f"  PASS 페이지 {page} (기존 상품들)")
+                
+            time.sleep(0.1)
+
+        except Exception as e:
+            print(f"❌ 에러: {e}")
+            break
+    
+    # 3. 신상품만 저장 (bulk insert)
+    if new_products:
+        print(f"\n💾 신상품 {len(new_products)}개 저장 중...")
+        
+        # 순서대로 저장 (오래된 신상 -> 아주 최신 신상)
+        # new_products 리스트는 이미 오름차순(페이지 순서대로)으로 쌓였음.
+        # 그대로 넣으면 됨.
+        
+        # 청크 나누어 저장
+        for i in range(0, len(new_products), 50):
+            chunk = new_products[i:i+50]
+            supabase.table("new_products").insert(chunk).execute()
+            
+        print("🎉 업데이트 완료!")
+    else:
+        print("\n✨ 새로운 상품이 없습니다. 최신 상태입니다.")
 
 if __name__ == "__main__":
     main()
