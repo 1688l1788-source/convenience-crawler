@@ -105,12 +105,24 @@ def main():
                         badge_tag = item.select_one(".badge")
                         category_name = badge_tag.text.strip() if badge_tag else "일반"
 
+                        # 5. 상품 상세 링크
+                        detail_link = item.select_one("a")
+                        product_url = "https://cu.bgfretail.com/product/product.do"
+                        if detail_link and detail_link.get('href'):
+                            href = detail_link['href']
+                            if href.startswith('http'):
+                                product_url = href
+                            elif href.startswith('/'):
+                                product_url = f"https://cu.bgfretail.com{href}"
+                            elif '?' in href or 'product' in href:
+                                product_url = f"https://cu.bgfretail.com/product/{href}"
+
                         product = {
                             "title": title,
                             "price": price,
                             "image_url": image_url,
                             "category": category_name,
-                            "source_url": "https://cu.bgfretail.com/product/product.do",
+                            "source_url": product_url,
                             "is_active": True,
                             "brand_id": 1
                         }
