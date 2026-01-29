@@ -8,7 +8,7 @@ from supabase import create_client
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY")
 
-MAX_PRODUCTS = 50  # 50개 테스트
+MAX_PRODUCTS = 50
 MAX_PAGES = 10
 
 def parse_product(item):
@@ -56,7 +56,7 @@ def parse_product(item):
 
 def crawl_icecream():
     products = []
-    # 최신순 파라미터 시도 (안 먹히면 로직으로 해결)
+    # 페이지 순회
     for page in range(1, MAX_PAGES + 1):
         if len(products) >= MAX_PRODUCTS:
             break
@@ -66,7 +66,7 @@ def crawl_icecream():
             "pageIndex": page,
             "searchMainCategory": "40",
             "listType": 0,
-            "searchCondition": "",  # 기본값
+            "searchCondition": "", 
         }
         headers = {
             "User-Agent": "Mozilla/5.0",
@@ -103,18 +103,16 @@ def main():
 
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-    # 1. 기존 데이터 삭제
+    # 1. 삭제
     supabase.table("new_products").delete().eq("brand_id", 1).execute()
 
-    # 2. 크롤링 (페이지 1 = 최신 상품 포함)
+    # 2. 크롤링 (나뚜루...찰옥수수 순서로 수집됨)
     products = crawl_icecream()
 
-    # 3. 중요: 저장 순서 뒤집기!
-    # products 리스트: [최신(찰옥수수), ..., 오래된(나뚜루)]
-    # reversed 적용: [오래된, ..., 최신]
-    # DB 저장 순서: 오래된(id=1) -> ... -> 최신(id=50)
-    # 앱(ORDER BY id DESC): id=50(최신) 먼저 출력! ✅
-    products_to_insert = list(reversed(products))
+    # 3. 저장 (순서 그대로!)
+    # 나뚜루(id=1) → ... → 찰옥수수(id=50)
+    # 앱(DESC): 찰옥수수 1등! ✅
+    products_to_insert = products  # reversed 제거!
 
     if products_to_insert:
         try:
@@ -125,7 +123,7 @@ def main():
 
     print(f"완료: 크롤링 {len(products)}개 / 저장 {len(products_to_insert)}개")
     if products:
-        print(f"1등 예상 상품 (앱 기준): {products[0]['title']}") # 크롤링 리스트의 0번 = 최신
+        print(f"1등 예상 상품 (앱 기준): {products[-1]['title']}") # 마지막에 저장된 게 1등!
 
 if __name__ == "__main__":
     main()
