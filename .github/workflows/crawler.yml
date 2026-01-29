@@ -2,36 +2,40 @@ name: Daily Convenience Crawler
 
 on:
   schedule:
-    - cron: "0 18 * * *"
-  workflow_dispatch:
+    - cron: '0 0 * * *'  # 매일 자정 실행
+  workflow_dispatch:  # 수동 실행
 
 jobs:
   crawl:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
     
     steps:
-      - name: 체크아웃
-        uses: actions/checkout@v4
-      
-      - name: Python 설치
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-          cache: 'pip'
-      
-      - name: 의존성 설치
-        run: |
-          pip install -r requirements.txt
-      
-      - name: CU 크롤링 실행
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-        run: |
-          python crawler/cu_crawler.py
-      
-      - name: 결과 요약
-        if: always()
-        run: |
-          echo "크롤링 작업 완료"
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+    
+    # ✨ Chrome 설치 추가
+    - name: Install Chrome
+      run: |
+        wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
+        sudo sh -c 'echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google-chrome.list'
+        sudo apt-get update
+        sudo apt-get install -y google-chrome-stable
+    
+    - name: Install dependencies
+      run: |
+        pip install -r requirements.txt
+    
+    - name: Run crawler
+      env:
+        SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+        SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      run: |
+        python crawler/cu_crawler.py
+    
+    - name: Complete
+      run: echo "크롤링 작업 완료"
