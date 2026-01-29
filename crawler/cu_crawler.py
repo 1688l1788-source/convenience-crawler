@@ -42,7 +42,7 @@ def main():
                 "searchMainCategory": cat_code,
                 "searchSubCategory": "",
                 "listType": 1,
-                "searchCondition": "",
+                "searchCondition": "regist_date",  # 최신순 정렬 파라미터 추가
                 "searchUseYn": "N",
                 "codeParent": cat_code,
             }
@@ -138,12 +138,8 @@ def main():
             except Exception as e:
                 print(f"❌ 페이지 요청 에러: {e}")
 
-    # 3. 데이터 뒤집기 (최신순 정렬)
-    print(f"\n🔄 데이터 정렬 중... (총 {len(all_products)}개)")
-    all_products.reverse()
-
-    # 4. DB 저장
-    print("💾 Supabase에 저장 중...")
+    # 3. DB 저장 (역순 정렬 제거 - API가 이미 최신순으로 반환)
+    print(f"\n💾 Supabase에 저장 중... (총 {len(all_products)}개)")
     count = 0
     for product in all_products:
         try:
