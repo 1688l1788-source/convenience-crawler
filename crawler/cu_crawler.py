@@ -60,69 +60,6 @@ def crawl_general_icecream():
     return products
 
 
-def crawl_pb_icecream():
-    """PB 아이스크림 크롤링 (depth 파라미터 테스트)"""
-    print("🏪 PB 아이스크림 크롤링 중...")
-    products = []
-    
-    for page in range(1, MAX_PAGES + 1):
-        if len(products) >= MAX_PRODUCTS:
-            break
-            
-        url = "https://cu.bgfretail.com/product/pbAjax.do"
-        payload = {
-            "pageIndex": page,
-            "depth2": "4",
-            "depth3": "4",
-            "listType": 0,
-            "searchCondition": "setA",
-            "searchUseYn": "",
-            "gdIdx": "0",
-            "searchgubun": "CUG",
-            "search1": "",
-            "search2": "",
-            "searchKeyword": ""
-        }
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-        }
-
-        try:
-            response = requests.post(url, data=payload, headers=headers, timeout=10)
-            response.encoding = 'utf-8'
-            soup = BeautifulSoup(response.text, 'html.parser')
-            items = soup.select("li.prod_list")
-
-            if not items:
-                print(f"  페이지 {page}: 데이터 없음, 종료")
-                break
-
-            print(f"  페이지 {page}: {len(items)}개 발견")
-            
-            # ✅ 디버깅: 처음 3개 제품명 출력
-            if page == 1:
-                print(f"  📝 PB 샘플 (페이지 1, 처음 3개):")
-                for i, item in enumerate(items[:3], 1):
-                    name_tag = item.select_one(".name p")
-                    title = name_tag.text.strip() if name_tag else "Unknown"
-                    print(f"    {i}. {title}")
-
-            for item in items:
-                if len(products) >= MAX_PRODUCTS: break
-                product = parse_product(item, "아이스크림")
-                if product:
-                    products.append(product)
-            
-            time.sleep(0.5)
-
-        except Exception as e:
-            print(f"  ❌ 페이지 {page} 요청 에러: {e}")
-    
-    print(f"✅ PB 아이스크림 {len(products)}개 크롤링 완료\n")
-    return products
-
-
 def parse_product(item, category_name):
     """공통 파싱 함수"""
     try:
@@ -170,7 +107,7 @@ def parse_product(item, category_name):
 
 
 def main():
-    print("🚀 CU 아이스크림 전용 크롤러 시작\n")
+    print("🚀 CU 아이스크림 크롤러 시작 (일반 상품만)\n")
 
     if not SUPABASE_URL or not SUPABASE_KEY:
         print("❌ 에러: Supabase 환경 변수가 없습니다.")
@@ -178,7 +115,7 @@ def main():
 
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
     
-    # ✅ 기존 아이스크림 데이터 삭제
+    # 기존 아이스크림 데이터 삭제
     print("🗑️  기존 아이스크림 데이터 삭제 중...")
     try:
         result = supabase.table("new_products").delete().eq("category", "아이스크림").execute()
@@ -186,18 +123,12 @@ def main():
     except Exception as e:
         print(f"⚠️ 삭제 에러: {e}\n")
     
-    # 1. 일반 아이스크림 크롤링
-    general_items = crawl_general_icecream()
+    # 일반 아이스크림 크롤링
+    all_items = crawl_general_icecream()
     
-    # 2. PB 아이스크림 크롤링
-    pb_items = crawl_pb_icecream()
+    print(f"💾 저장 시작... (총 {len(all_items)}개)\n")
     
-    # 3. 합치기
-    all_items = general_items + pb_items
-    
-    print(f"💾 저장 시작... (일반 {len(general_items)} + PB {len(pb_items)} = 총 {len(all_items)}개)\n")
-    
-    # 4. 저장
+    # 저장
     saved_count = 0
     for product in reversed(all_items):
         if not product: continue
