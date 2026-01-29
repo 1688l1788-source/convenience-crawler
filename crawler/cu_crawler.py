@@ -8,12 +8,11 @@ import time
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY")
 
-# 빈 문자열은 "전체 카테고리"를 의미합니다.
-TARGET_CATEGORIES = ['']  
+TARGET_CATEGORIES = ['40']  # 아이스크림/스낵
 MAX_PAGES = 5
 
 def main():
-    print("🚀 CU 크롤러 시작 (전체 카테고리 모드)")
+    print("🚀 CU 크롤러 시작 (API 모드)")
 
     if not SUPABASE_URL or not SUPABASE_KEY:
         print("❌ 에러: Supabase 환경 변수가 없습니다.")
@@ -30,24 +29,23 @@ def main():
 
     all_products = []
 
-    # 2. 전체 카테고리 크롤링 (역순 5→1)
-    # 카테고리가 ''(전체) 하나이므로 전체 신상품 순서대로 가져옵니다.
+    # 2. 카테고리별 크롤링 (정순으로 1→2→3→4→5)
     for cat_code in TARGET_CATEGORIES:
-        print(f"\n📂 전체 신상품(All) 크롤링 시작...")
+        print(f"\n📂 카테고리 {cat_code} 크롤링 시작...")
         
-        # 페이지를 역순으로 크롤링 (5→4→3→2→1)
-        for page in range(MAX_PAGES, 0, -1):
+        # 페이지를 정순으로 크롤링 (1→2→3→4→5)
+        for page in range(1, MAX_PAGES + 1):
             print(f"  - 페이지 {page} 요청 중...")
             
             url = "https://cu.bgfretail.com/product/productAjax.do"
             payload = {
                 "pageIndex": page,
-                "searchMainCategory": cat_code, # 전체
+                "searchMainCategory": cat_code,
                 "searchSubCategory": "",
                 "listType": 1,
                 "searchCondition": "",
                 "searchUseYn": "N",
-                "codeParent": ""
+                "codeParent": cat_code
             }
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -71,10 +69,8 @@ def main():
 
                 print(f"    ✅ {len(items)}개 제품 발견")
                 
-                # 각 페이지 내에서도 역순으로 처리 (하단 → 상단)
-                items_reversed = list(reversed(items))
-
-                for item in items_reversed:
+                # 각 페이지 내에서 정순으로 처리
+                for item in items:
                     try:
                         # 1. 제품명
                         name_tag = item.select_one(".name p")
@@ -144,30 +140,26 @@ def main():
             except Exception as e:
                 print(f"❌ 페이지 요청 에러: {e}")
 
-    # 3. DB 저장
+    # 3. DB 저장 (역순으로 저장하여 최신 상품이 큰 ID를 받도록)
     print(f"\n💾 Supabase에 저장 중... (총 {len(all_products)}개)")
+    count = 0
     
     if all_products:
-        print(f"  🔝 시작 (가장 작은 ID - 5페이지 하단): {all_products[0]['title']}")
-        print(f"  🔚 끝 (가장 큰 ID - 1페이지 상단): {all_products[-1]['title']}")
-        
-        # 마지막 아이템이 찰옥수수인지 확인용 로그
-        if "찰옥수수" in all_products[-1]['title']:
-            print("  ✨ 확인: 찰옥수수가 가장 마지막(최신)으로 감지되었습니다!")
-        else:
-            print(f"  ⚠️ 주의: 1페이지 최상단이 '{all_products[-1]['title']}' 입니다.")
-
-    count = 0
-    for product in all_products:
+        print(f"  🔝 첫 크롤링 (가장 작은 ID 받을 예정): {all_products[0]['title']}")
+        print(f"  🔚 마지막 크롤링 (가장 큰 ID 받을 예정): {all_products[-1]['title']}")
+    
+    # 역순으로 저장하여 페이지 1의 첫 번째 상품이 가장 큰 ID를 받도록
+    for product in reversed(all_products):
         try:
             supabase.table("new_products").insert(product).execute()
             count += 1
-            if count % 50 == 0:
+            if count % 10 == 0:
                 print(f"  - {count}개 저장 완료...")
         except Exception as e:
             print(f"  ⚠️ 저장 실패 ({product['title']}): {e}")
 
-    print(f"\n🎉 완료! 총 {count}개 제품 업데이트.")
+    print(f"\n🎉 완료! 총 {count}개 제품이 업데이트되었습니다.")
+    print(f"💡 '{all_products[0]['title']}'이 가장 큰 ID를 받아 앱 맨 위에 표시됩니다.")
 
 if __name__ == "__main__":
     main()
