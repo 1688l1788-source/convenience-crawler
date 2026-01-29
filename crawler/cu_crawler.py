@@ -41,8 +41,8 @@ def main():
                 "pageIndex": page,
                 "searchMainCategory": cat_code,
                 "searchSubCategory": "",
-                "listType": 0,
-                "searchCondition": "setC",
+                "listType": 1,
+                "searchCondition": "",
                 "searchUseYn": "N",
                 "codeParent": cat_code
             }
@@ -67,12 +67,6 @@ def main():
                     break
 
                 print(f"    ✅ {len(items)}개 제품 발견")
-                
-                # 첫 제품 확인
-                if page == 1 and items:
-                    first_title = items[0].select_one(".name p")
-                    if first_title:
-                        print(f"    🔝 첫 제품: {first_title.text.strip()}")
 
                 for item in items:
                     try:
@@ -144,12 +138,18 @@ def main():
             except Exception as e:
                 print(f"❌ 페이지 요청 에러: {e}")
 
-    # 3. DB 저장 (역순 안 함)
-    print(f"\n💾 Supabase에 저장 중... (총 {len(all_products)}개)")
+    # 3. 데이터 역순 정렬 (마지막 제품이 최신이라고 가정)
+    print(f"\n🔄 데이터 역순 정렬 중... (총 {len(all_products)}개)")
+    all_products.reverse()
+
+    # 4. DB 저장
+    print("💾 Supabase에 저장 중...")
     count = 0
     
+    # 첫 번째와 마지막 제품 로그
     if all_products:
         print(f"  🔝 첫 저장: {all_products[0]['title']}")
+        print(f"  🔚 마지막 저장: {all_products[-1]['title']}")
     
     for product in all_products:
         try:
@@ -161,6 +161,7 @@ def main():
             print(f"  ⚠️ 저장 실패 ({product['title']}): {e}")
 
     print(f"\n🎉 완료! 총 {count}개 제품이 업데이트되었습니다.")
+    print(f"💡 React 앱에서 ID 역순 정렬 시 '{all_products[0]['title']}'이 맨 위에 표시됩니다.")
 
 if __name__ == "__main__":
     main()
