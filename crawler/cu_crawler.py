@@ -53,11 +53,9 @@ class CUCrawler:
     def extract_gdidx(self, item):
         """onclick=view(26285) 에서 gdIdx 추출"""
         try:
-            # onclick 속성 찾기
             clickable = item.find(attrs={'onclick': True})
             if clickable:
                 onclick = clickable.get('onclick', '')
-                # view(26285) 패턴에서 숫자 추출
                 match = re.search(r'view\((\d+)\)', onclick)
                 if match:
                     return match.group(1)
@@ -73,19 +71,16 @@ class CUCrawler:
             driver.get(category_url)
             time.sleep(5)
             
-            # 페이지 스크롤
             driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
             time.sleep(2)
             
             soup = BeautifulSoup(driver.page_source, 'html.parser')
             
-            # 제품 영역 찾기
             product_area = soup.select_one('.prodListWrap, .prodArea')
             if not product_area:
                 print(f"  ⚠️ 제품 영역을 찾을 수 없습니다")
                 return products
             
-            # 제품 항목 찾기
             items = product_area.select('li')
             print(f"  🔍 {len(items)}개 항목 발견")
             
@@ -115,12 +110,20 @@ class CUCrawler:
                     
                     title = name_tag.get_text(strip=True)
                     
-                    # 제품명 검증
-                    if not title or len(title) < 2:
+                    # 제품명 검증 강화
+                    if not title or len(title) < 3:
                         continue
                     
-                    # 파일명이나 New 제외
-                    if title.endswith('.jpg') or title.endswith('.png') or title == 'New':
+                    # 파일명 패턴 제외 (숫자.확장자)
+                    if re.match(r'^\d+\.(jpg|png|jpeg)$', title, re.IGNORECASE):
+                        continue
+                    
+                    # New 태그 제외
+                    if title == 'New':
+                        continue
+                    
+                    # 확장자로 끝나는 경우 제외
+                    if title.lower().endswith(('.jpg', '.png', '.jpeg')):
                         continue
                     
                     # 3. gdIdx 추출 (상세 페이지 URL)
@@ -129,7 +132,11 @@ class CUCrawler:
                     if gdidx:
                         source_url = f"{self.base_url}/product/view.do?gdIdx={gdidx}&category=product"
                     else:
-                        source_url = category_url  # gdIdx 없으면 카테고리 페이지
+                        source_url = category_url
+                    
+                    # PB 상품 페이지 제외
+                    if 'pb.do' in source_url:
+                        continue
                     
                     # 4. 가격 추출
                     price = 0
@@ -169,7 +176,7 @@ class CUCrawler:
                     }
                     
                     products.append(product)
-                    print(f"    ✓ {title} ({price}원) [{gdidx or 'N/A'}]")
+                    print(f"    ✓ {title[:40]} ({price}원) [gdIdx:{gdidx or 'N/A'}]")
                     
                 except Exception as e:
                     continue
@@ -186,7 +193,7 @@ class CUCrawler:
         title_lower = title.lower()
         
         keywords = {
-            '아이스크림': ['아이스크림', '빙과', '콘', '바', '슬러시', '아이스', 'ice', '소프트', '젤라또', '셔벗', '소르베', '팝콘'],
+            '아이스크림': ['아이스크림', '빙과', '콘', '바', '슬러시', 'ice', '소프트', '젤라또', '셔벗', '소르베', '팝콘'],
             '과자류': ['과자', '스낵', '칩', '쿠키', '비스킷', '초콜릿', '사탕', '젤리', '껌', '캔디', '웨하스', '크래커'],
             '음료': ['음료', '주스', '커피', '차', '워터', '탄산', '에너지', '이온', '밀크', '라떼', '에이드', '스무디'],
             '간편식사': ['도시락', '김밥', '샌드위치', '삼각', '주먹밥', '햄버거', '핫도그', '토스트', '롤', '랩'],
