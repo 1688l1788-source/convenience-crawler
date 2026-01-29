@@ -29,11 +29,12 @@ def main():
 
     all_products = []
 
-    # 2. 카테고리별 크롤링
+    # 2. 카테고리별 크롤링 (역순으로 5→1)
     for cat_code in TARGET_CATEGORIES:
         print(f"\n📂 카테고리 {cat_code} 크롤링 시작...")
         
-        for page in range(1, MAX_PAGES + 1):
+        # 페이지를 역순으로 크롤링 (5→4→3→2→1)
+        for page in range(MAX_PAGES, 0, -1):
             print(f"  - 페이지 {page} 요청 중...")
             
             url = "https://cu.bgfretail.com/product/productAjax.do"
@@ -63,12 +64,15 @@ def main():
                 items = soup.select("li.prod_list")
 
                 if not items:
-                    print("    ℹ️ 더 이상 제품이 없습니다.")
-                    break
+                    print("    ℹ️ 제품이 없습니다.")
+                    continue
 
                 print(f"    ✅ {len(items)}개 제품 발견")
+                
+                # 각 페이지 내에서도 역순으로 처리
+                items_reversed = list(reversed(items))
 
-                for item in items:
+                for item in items_reversed:
                     try:
                         # 1. 제품명
                         name_tag = item.select_one(".name p")
@@ -138,18 +142,13 @@ def main():
             except Exception as e:
                 print(f"❌ 페이지 요청 에러: {e}")
 
-    # 3. 데이터 역순 정렬 (마지막 제품이 최신이라고 가정)
-    print(f"\n🔄 데이터 역순 정렬 중... (총 {len(all_products)}개)")
-    all_products.reverse()
-
-    # 4. DB 저장
-    print("💾 Supabase에 저장 중...")
+    # 3. DB 저장 (역순 안 함 - 이미 역순으로 크롤링함)
+    print(f"\n💾 Supabase에 저장 중... (총 {len(all_products)}개)")
     count = 0
     
-    # 첫 번째와 마지막 제품 로그
     if all_products:
-        print(f"  🔝 첫 저장: {all_products[0]['title']}")
-        print(f"  🔚 마지막 저장: {all_products[-1]['title']}")
+        print(f"  🔝 첫 저장 (가장 작은 ID): {all_products[0]['title']}")
+        print(f"  🔚 마지막 저장 (가장 큰 ID): {all_products[-1]['title']}")
     
     for product in all_products:
         try:
@@ -161,7 +160,7 @@ def main():
             print(f"  ⚠️ 저장 실패 ({product['title']}): {e}")
 
     print(f"\n🎉 완료! 총 {count}개 제품이 업데이트되었습니다.")
-    print(f"💡 React 앱에서 ID 역순 정렬 시 '{all_products[0]['title']}'이 맨 위에 표시됩니다.")
+    print(f"💡 '{all_products[-1]['title']}'이 가장 큰 ID를 받아 앱 맨 위에 표시됩니다.")
 
 if __name__ == "__main__":
     main()
