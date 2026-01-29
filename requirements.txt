@@ -3,3 +3,4 @@ beautifulsoup4==4.12.3
 supabase==1.0.4
 postgrest==0.10.8
 lxml==5.1.0
+selenium==4.16.0
