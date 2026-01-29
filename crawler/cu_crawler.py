@@ -1,58 +1,151 @@
-for item in items:
+import requests
+from bs4 import BeautifulSoup
+from supabase import create_client
+import os
+import time
+
+# --- 설정 ---
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY")
+
+TARGET_CATEGORIES = ['40']  # 아이스크림/스낵
+MAX_PAGES = 5
+
+def main():
+    print("🚀 CU 크롤러 시작 (API 모드)")
+
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        print("❌ 에러: Supabase 환경 변수가 없습니다.")
+        return
+
+    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+    
+    # 1. 기존 데이터 초기화
+    print("🗑️ 기존 데이터 삭제 중...")
     try:
-        # 1. 제품명
-        name_tag = item.select_one(".name p")
-        if not name_tag: 
-            continue
-        title = name_tag.text.strip()
-
-        # 2. 가격
-        price_tag = item.select_one(".price strong")
-        price_text = price_tag.text.strip().replace(",", "").replace("원", "") if price_tag else "0"
-        price = int(price_text) if price_text.isdigit() else 0
-
-        # 3. 이미지 URL (개선)
-        img_tag = item.select_one("img")
-        image_url = ""
-        
-        if img_tag:
-            # src, data-src, data-original 등 다양한 속성 확인
-            image_url = (
-                img_tag.get('src') or 
-                img_tag.get('data-src') or 
-                img_tag.get('data-original') or 
-                ""
-            )
-            
-            # URL 정규화
-            if image_url:
-                if image_url.startswith('//'):
-                    image_url = f"https:{image_url}"
-                elif image_url.startswith('/'):
-                    image_url = f"https://cu.bgfretail.com{image_url}"
-                elif not image_url.startswith('http'):
-                    image_url = f"https://cu.bgfretail.com/{image_url}"
-        
-        # 4. 행사 정보
-        badge_tag = item.select_one(".badge")
-        category_name = badge_tag.text.strip() if badge_tag else "일반"
-
-        product = {
-            "title": title,
-            "price": price,
-            "image_url": image_url,
-            "category": category_name,
-            "source_url": "https://cu.bgfretail.com/product/product.do",
-            "is_active": True,
-            "brand_id": 1
-        }
-        
-        all_products.append(product)
-        
-        # 이미지 없는 제품 로깅
-        if not image_url:
-            print(f"⚠️ No image: {title}")
-
+        supabase.table("new_products").delete().neq("id", 0).execute()
     except Exception as e:
-        print(f"⚠️ 제품 파싱 에러: {e}")
-        continue
+        print(f"⚠️ 삭제 중 오류 (무시 가능): {e}")
+
+    all_products = []
+
+    # 2. 카테고리별 크롤링
+    for cat_code in TARGET_CATEGORIES:
+        print(f"\n📂 카테고리 {cat_code} 크롤링 시작...")
+        
+        for page in range(1, MAX_PAGES + 1):
+            print(f"  - 페이지 {page} 요청 중...")
+            
+            url = "https://cu.bgfretail.com/product/productAjax.do"
+            payload = {
+                "pageIndex": page,
+                "searchMainCategory": cat_code,
+                "searchSubCategory": "",
+                "listType": 1,
+                "searchCondition": "",
+                "searchUseYn": "N",
+                "codeParent": cat_code,
+            }
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+            }
+
+            try:
+                response = requests.post(url, data=payload, headers=headers, timeout=10)
+                response.encoding = 'utf-8'
+                
+                if response.status_code != 200:
+                    print(f"❌ 요청 실패: {response.status_code}")
+                    continue
+
+                soup = BeautifulSoup(response.text, 'html.parser')
+                items = soup.select("li.prod_list")
+
+                if not items:
+                    print("    ℹ️ 더 이상 제품이 없습니다.")
+                    break
+
+                print(f"    ✅ {len(items)}개 제품 발견")
+
+                for item in items:
+                    try:
+                        # 1. 제품명
+                        name_tag = item.select_one(".name p")
+                        if not name_tag:
+                            continue
+                        title = name_tag.text.strip()
+
+                        # 2. 가격
+                        price_tag = item.select_one(".price strong")
+                        price_text = price_tag.text.strip().replace(",", "").replace("원", "") if price_tag else "0"
+                        price = int(price_text) if price_text.isdigit() else 0
+
+                        # 3. 이미지 URL
+                        img_tag = item.select_one("img")
+                        image_url = ""
+                        
+                        if img_tag:
+                            image_url = (
+                                img_tag.get('src') or 
+                                img_tag.get('data-src') or 
+                                img_tag.get('data-original') or 
+                                ""
+                            )
+                            
+                            if image_url:
+                                if image_url.startswith('//'):
+                                    image_url = f"https:{image_url}"
+                                elif image_url.startswith('/'):
+                                    image_url = f"https://cu.bgfretail.com{image_url}"
+                                elif not image_url.startswith('http'):
+                                    image_url = f"https://cu.bgfretail.com/{image_url}"
+                        
+                        if not image_url:
+                            print(f"    ⚠️ 이미지 없음: {title}")
+
+                        # 4. 행사 정보
+                        badge_tag = item.select_one(".badge")
+                        category_name = badge_tag.text.strip() if badge_tag else "일반"
+
+                        product = {
+                            "title": title,
+                            "price": price,
+                            "image_url": image_url,
+                            "category": category_name,
+                            "source_url": "https://cu.bgfretail.com/product/product.do",
+                            "is_active": True,
+                            "brand_id": 1
+                        }
+                        
+                        all_products.append(product)
+
+                    except Exception as e:
+                        print(f"    ⚠️ 제품 파싱 에러: {e}")
+                        continue
+                
+                time.sleep(1)
+
+            except Exception as e:
+                print(f"❌ 페이지 요청 에러: {e}")
+
+    # 3. 데이터 뒤집기
+    print(f"\n🔄 데이터 정렬 중... (총 {len(all_products)}개)")
+    all_products.reverse()
+
+    # 4. DB 저장
+    print("💾 Supabase에 저장 중...")
+    count = 0
+    for product in all_products:
+        try:
+            supabase.table("new_products").insert(product).execute()
+            count += 1
+            if count % 10 == 0:
+                print(f"  - {count}개 저장 완료...")
+        except Exception as e:
+            print(f"  ⚠️ 저장 실패 ({product['title']}): {e}")
+
+    print(f"\n🎉 완료! 총 {count}개 제품이 업데이트되었습니다.")
+
+if __name__ == "__main__":
+    main()
