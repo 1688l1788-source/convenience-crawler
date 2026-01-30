@@ -3,6 +3,7 @@ import time
 import re
 import json
 import requests
+from bs4 import BeautifulSoup
 from supabase import create_client
 
 # 환경변수 로드
@@ -10,17 +11,15 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY")
 
 # ==========================================
-# 🧠 통합 카테고리 분류기 (앱 필터링용)
+# 🧠 통합 카테고리 분류기
 # ==========================================
 def get_standard_category(title, raw_category=None):
     """
-    제목과 원본 카테고리를 분석하여 앱에서 사용할 '표준 카테고리'를 반환합니다.
-    우선순위: 생활용품 > 식사/라면 > 과자/간식 > 아이스 > 음료 > 원본기반 매핑
+    앱에서 사용할 표준 카테고리(탭 이름)를 결정합니다.
     """
-    
-    # 1. 생활용품 (가장 강력한 필터링)
+    # 1. 생활용품 (강력 필터링)
     if any(k in title for k in [
-        '치약', '칫솔', '가그린', '가글', '페리오', '메디안', '2080', '리치', '덴탈', '마우스', '쉐이빙', '면도기',
+        '치약', '칫솔', '가글', '가그린', '페리오', '메디안', '2080', '리치', '덴탈', '마우스', '쉐이빙', '면도기',
         '물티슈', '티슈', '마스크', '생리대', '중형', '대형', '소형', '오버나이트', '입는오버', '패드', '라이너', '탐폰', '팬티',
         '라엘', '쏘피', '화이트', '좋은느낌', '시크릿데이', '애니데이', '디어스킨', '순수한면',
         '샴푸', '린스', '트리트먼트', '헤어', '세럼', '비누', '엘라스틴', '케라시스', '오가니스트', '온더바디', '바디워시',
@@ -29,7 +28,7 @@ def get_standard_category(title, raw_category=None):
     ]):
         return "생활용품"
 
-    # 2. 식사/라면 (식품 중에서도 구체적인 식사류)
+    # 2. 식사/라면
     if any(k in title for k in [
         '도시락', '김밥', '주먹밥', '샌드위치', '햄버거', '라면', '면', '우동', '국밥', '죽', '탕', '찌개', 
         '햇반', '컵반', '핫바', '소시지', '만두', '닭가슴살', '치킨', '육개장', '그래놀라', '통곡물밥', '크랩', '튀김', '브리또', '파스타'
@@ -54,37 +53,67 @@ def get_standard_category(title, raw_category=None):
     ]):
         return "음료"
 
-    # 6. 키워드에 안 걸렸지만 CU 원본 카테고리가 있는 경우 매핑
+    # 6. CU 원본 카테고리 매핑 (키워드에 안 걸린 경우)
     if raw_category:
-        if raw_category in ["간편식사", "즉석조리", "식품"]:
-            return "식사/라면"
-        if raw_category == "과자류":
-            return "과자/간식"
-        if raw_category == "아이스크림":
-            return "아이스"
-        if raw_category == "생활용품":
-            return "생활용품"
-        if raw_category == "음료":
-            return "음료"
+        if raw_category in ["간편식사", "즉석조리", "식품"]: return "식사/라면"
+        if raw_category == "과자류": return "과자/간식"
+        if raw_category == "아이스크림": return "아이스"
+        if raw_category == "생활용품": return "생활용품"
+        if raw_category == "음료": return "음료"
 
     return "기타"
 
 # ==========================================
-# 🏪 1. CU 크롤링
+# 🏪 1. CU 크롤링 (BeautifulSoup 적용)
 # ==========================================
+def parse_cu_item(item, raw_cat_name, code_suffix):
+    try:
+        # 상품명
+        name_tag = item.select_one(".name p")
+        if not name_tag: return None
+        title = name_tag.get_text(strip=True)
+        
+        # 가격
+        price_tag = item.select_one(".price strong")
+        price = int(price_tag.get_text(strip=True).replace(",", "")) if price_tag else 0
+        
+        # 이미지
+        img_tag = item.select_one("img")
+        img_src = ""
+        if img_tag:
+            img_src = img_tag.get("src") or ""
+            if img_src and not img_src.startswith("http"):
+                img_src = "https:" + img_src
+        
+        # 행사 정보 (1+1 등)
+        badge = item.select_one(".badge")
+        promo = badge.get_text(strip=True) if badge else "행사"
+        
+        # ID 추출 (온클릭 이벤트 등에서)
+        # CU는 별도 ID가 명확치 않아 임의 생성하되, 중복 방지를 위해 title 해시 등을 쓸 수 있으나
+        # 여기서는 타임스탬프와 인덱스 조합 사용
+        
+        # 카테고리 결정
+        std_category = get_standard_category(title, raw_cat_name)
+        
+        return {
+            "title": title,
+            "price": price,
+            "image_url": img_src,
+            "category": std_category,
+            "original_category": raw_cat_name,
+            "promotion_type": promo,
+            "brand_id": 1,
+            "source_url": "https://cu.bgfretail.com/event/product.do",
+            "is_active": True
+        }
+    except Exception as e:
+        # print(f"파싱 에러: {e}")
+        return None
+
 def crawl_cu(supabase):
     print("\n🚀 CU 크롤링 시작...")
     
-    # 기존 데이터 삭제 (brand_id=1)
-    supabase.table("new_products").delete().eq("brand_id", 1).execute()
-
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Referer": "https://cu.bgfretail.com/event/product.do",
-        "X-Requested-With": "XMLHttpRequest"
-    }
-    
-    # CU 내부 카테고리 코드 (원본 이름 저장용)
     cu_categories = {
         "GD_01": "간편식사",
         "GD_02": "즉석조리",
@@ -95,55 +124,53 @@ def crawl_cu(supabase):
         "GD_07": "생활용품"
     }
     
-    url = "https://cu.bgfretail.com/event/product.do"
-    all_products = []
-
-    for code, raw_cat_name in cu_categories.items():
-        print(f"🔎 CU 조회: {raw_cat_name} ({code})")
-        
-        for page in range(1, 15): 
-            payload = {"pageIndex": str(page), "listType": "1", "searchCondition": code, "user_id": ""}
+    all_items = []
+    
+    for code, name in cu_categories.items():
+        print(f"🔎 CU 조회: {name} ({code})")
+        for page in range(1, 15):
+            url = "https://cu.bgfretail.com/product/productAjax.do"
+            payload = {"pageIndex": page, "searchMainCategory": code, "listType": 1}
+            headers = {"User-Agent": "Mozilla/5.0"}
+            
             try:
                 r = requests.post(url, data=payload, headers=headers, timeout=10)
-                r.encoding = 'utf-8'
+                soup = BeautifulSoup(r.text, "html.parser")
+                items = soup.select("li.prod_list")
                 
-                # HTML 파싱 (정규식)
-                titles = re.findall(r'<div class="name">.*?<p>(.*?)</p>.*?</div>', r.text, re.DOTALL)
-                prices = re.findall(r'<strong>\s*([0-9,]+)\s*</strong>', r.text)
-                images = re.findall(r'<img\s+src="(.*?)"', r.text)
-                promos = re.findall(r'class="badge">.*?<span>(.*?)</span>', r.text, re.DOTALL)
-
-                if not titles: break
-
-                for i in range(len(titles)):
-                    title = titles[i].strip()
-                    # 1. 표준 카테고리 결정 (키워드 우선 + 원본 카테고리 보조)
-                    std_category = get_standard_category(title, raw_cat_name)
-                    
-                    img = images[i]
-                    if not img.startswith('http'): img = "https:" + img
-
-                    all_products.append({
-                        "title": title,
-                        "price": int(prices[i].replace(',', '')),
-                        "image_url": img,
-                        "category": std_category,       # 앱 필터링용 표준 카테고리
-                        "original_category": raw_cat_name, # CU 원본 카테고리 (DB 보존용)
-                        "promotion_type": promos[i].strip() if i < len(promos) else "행사",
-                        "brand_id": 1,
-                        "source_url": "https://cu.bgfretail.com/event/product.do",
-                        "is_active": True,
-                        "external_id": int(time.time() * 1000) + i + (int(code[-2:]) * 10000)
-                    })
+                if not items: break
+                
+                count = 0
+                for idx, item in enumerate(items):
+                    p = parse_cu_item(item, name, int(code[-2:]))
+                    if p:
+                        # 고유 ID 생성 (안전하게 유니크하게 만듦)
+                        p['external_id'] = int(time.time() * 1000) + len(all_items)
+                        all_items.append(p)
+                        count += 1
+                
+                # print(f"   - {page}페이지: {count}개")
                 time.sleep(0.2)
             except Exception as e:
                 print(f"   ❌ 에러: {e}")
                 break
 
-    if all_products:
-        print(f"💾 CU {len(all_products)}개 저장 중...")
-        for i in range(0, len(all_products), 100):
-            supabase.table("new_products").insert(all_products[i:i+100]).execute()
+    # [안전장치] 데이터가 수집되었을 때만 DB 삭제 및 저장
+    if len(all_items) > 0:
+        print(f"✅ CU 총 {len(all_items)}개 데이터 수집 성공. DB 업데이트 시작...")
+        try:
+            # 기존 CU 데이터 삭제
+            supabase.table("new_products").delete().eq("brand_id", 1).execute()
+            
+            # 100개씩 나누어 저장
+            for i in range(0, len(all_items), 100):
+                chunk = all_items[i:i+100]
+                supabase.table("new_products").insert(chunk).execute()
+            print("🎉 CU 데이터 저장 완료!")
+        except Exception as e:
+            print(f"❌ DB 저장 중 오류 발생: {e}")
+    else:
+        print("😱 경고: CU 데이터를 하나도 찾지 못했습니다. DB를 삭제하지 않습니다.")
 
 # ==========================================
 # 🏪 2. GS25 크롤링
@@ -151,78 +178,97 @@ def crawl_cu(supabase):
 def crawl_gs25(supabase):
     print("\n🚀 GS25 크롤링 시작...")
     
-    # 기존 데이터 삭제 (brand_id=2)
-    supabase.table("new_products").delete().eq("brand_id", 2).execute()
-
     session = requests.Session()
     session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0",
         "Referer": "http://gs25.gsretail.com/gscvs/ko/products/event-goods",
         "X-Requested-With": "XMLHttpRequest"
     })
     
     try:
         r = session.get("http://gs25.gsretail.com/gscvs/ko/products/event-goods", timeout=10)
-        csrf_token = re.search(r'name="CSRFToken" value="([^"]+)"', r.text).group(1)
+        csrf = re.search(r'name="CSRFToken" value="([^"]+)"', r.text)
+        if not csrf:
+            # 다른 패턴 시도
+            csrf = re.search(r'CSRFToken\s*[:=]\s*["\']([^"\']+)["\']', r.text)
+        
+        token = csrf.group(1) if csrf else None
+        if not token:
+            print("❌ GS25 토큰 획득 실패")
+            return
     except:
-        print("❌ GS25 토큰 획득 실패")
+        print("❌ GS25 접속 실패")
         return
 
+    all_items = []
     promo_types = ["ONE_TO_ONE", "TWO_TO_ONE", "GIFT"]
-    url = "http://gs25.gsretail.com/gscvs/ko/products/event-goods-search"
-    all_products = []
+    promo_map = {"ONE_TO_ONE": "1+1", "TWO_TO_ONE": "2+1", "GIFT": "덤증정"}
 
     for p_type in promo_types:
         print(f"🔎 GS25 조회: {p_type}")
         for page in range(1, 20):
-            payload = {"CSRFToken": csrf_token, "pageNum": str(page), "pageSize": "50", "parameterList": p_type}
+            url = "http://gs25.gsretail.com/gscvs/ko/products/event-goods-search"
+            payload = {
+                "CSRFToken": token, "pageNum": str(page), "pageSize": "50", 
+                "parameterList": p_type
+            }
+            
             try:
                 r = session.post(url, data=payload, timeout=10)
                 r.encoding = 'utf-8'
-                data = json.loads(r.text) if isinstance(r.json(), str) else r.json()
+                data = json.loads(r.text)
                 results = data.get("results", [])
                 
                 if not results: break
                 
                 for item in results:
                     title = item.get("goodsNm", "").strip()
-                    price = int(item.get("price", 0))
-                    
-                    # GS25는 원본 카테고리가 없으므로 None 처리하고 키워드로 분류
-                    std_category = get_standard_category(title, None)
+                    # GS는 원본 카테고리가 없으므로 키워드로 분류
+                    std_cat = get_standard_category(title, None)
                     
                     # ID 추출
-                    id_match = re.search(r'(\d+)', item.get("attFileId", ""))
+                    att_id = item.get("attFileId", "")
+                    id_match = re.search(r'(\d+)', att_id)
                     ext_id = int(id_match.group(1)[-18:]) if id_match else int(time.time() * 1000)
-
-                    promo_map = {"ONE_TO_ONE": "1+1", "TWO_TO_ONE": "2+1", "GIFT": "덤증정"}
-
-                    all_products.append({
+                    
+                    all_items.append({
                         "title": title,
-                        "price": price,
+                        "price": int(item.get("price", 0)),
                         "image_url": item.get("attFileNm", ""),
-                        "category": std_category,       # 앱 필터링용 표준 카테고리
-                        "original_category": None,      # GS는 원본 카테고리 정보 없음
-                        "promotion_type": promo_map.get(p_type, "행사"),
+                        "category": std_cat,
+                        "original_category": None,
+                        "promotion_type": promo_map[p_type],
                         "brand_id": 2,
                         "source_url": "http://gs25.gsretail.com/gscvs/ko/products/event-goods",
                         "is_active": True,
                         "external_id": ext_id
                     })
                 time.sleep(0.3)
-            except: break
+            except Exception as e:
+                print(f"   ❌ 에러: {e}")
+                break
 
-    if all_products:
-        print(f"💾 GS25 {len(all_products)}개 저장 중...")
-        for i in range(0, len(all_products), 100):
-            supabase.table("new_products").insert(all_products[i:i+100]).execute()
+    # [안전장치] 데이터가 수집되었을 때만 DB 삭제 및 저장
+    if len(all_items) > 0:
+        print(f"✅ GS25 총 {len(all_items)}개 데이터 수집 성공. DB 업데이트 시작...")
+        try:
+            supabase.table("new_products").delete().eq("brand_id", 2).execute()
+            
+            for i in range(0, len(all_items), 100):
+                chunk = all_items[i:i+100]
+                supabase.table("new_products").insert(chunk).execute()
+            print("🎉 GS25 데이터 저장 완료!")
+        except Exception as e:
+            print(f"❌ DB 저장 중 오류: {e}")
+    else:
+        print("😱 경고: GS25 데이터를 찾지 못했습니다.")
 
 # ==========================================
-# 🚀 메인 실행
+# 🚀 메인
 # ==========================================
 def main():
     if not SUPABASE_URL or not SUPABASE_KEY:
-        print("❌ 설정 오류: 환경변수 누락")
+        print("❌ 환경변수 누락")
         return
     
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -230,7 +276,7 @@ def main():
     crawl_cu(supabase)
     crawl_gs25(supabase)
     
-    print("\n🎉 크롤링 완료")
+    print("\n🎉 크롤링 프로세스 종료")
 
 if __name__ == "__main__":
     main()
