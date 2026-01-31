@@ -28,7 +28,7 @@ def get_standard_category(title, raw_category=None):
         if raw_category == "음료": return "음료"
         if raw_category == "생활용품": return "생활용품"
         if raw_category == "식품": return "식품"
-        if raw_category == "즉석조리": return None 
+        if raw_category == "즉석조리": return None
 
     # [2] 키워드 분류 (GS25, 세븐일레븐)
     # 1. 생활용품
@@ -112,19 +112,19 @@ def parse_cu_product(item, raw_cat_name):
         if badge_tag:
             badge_text = badge_tag.get_text(strip=True).upper()
             if "NEW" in badge_text: is_new = True
-            
             span = badge_tag.find("span")
             if span:
-                promo = span.get_text(strip=True)
+                promo_text = span.get_text(strip=True)
+                if promo_text not in ["NEW"]: promo = promo_text
             else:
                 clean = badge_text.replace("NEW", "").strip()
                 if clean: promo = clean
-
+        
         all_imgs = item.find_all("img")
         for img in all_imgs:
             src = img.get("src", "").upper()
             alt = img.get("alt", "").upper()
-            if "NEW" in src or "NEW" in alt:
+            if "TAG_NEW" in src or "NEW" in alt:
                 is_new = True
                 break
 
@@ -164,8 +164,7 @@ def parse_cu_product(item, raw_cat_name):
 
 def crawl_cu(supabase):
     print("\n🚀 CU 크롤링 시작...")
-    supabase.table("new_products").delete().eq("brand_id", 1).execute()
-
+    
     cu_categories = [
         {"id": "10", "name": "간편식사"},
         {"id": "30", "name": "과자류"},
@@ -184,7 +183,7 @@ def crawl_cu(supabase):
     all_cu_items = []
     
     for cat in cu_categories:
-        print(f"🔎 CU 조회: {cat['name']} (ID: {cat['id']})")
+        print(f"🔎 CU 조회: {cat['name']}")
         for page in range(1, 21):
             try:
                 r = requests.post("https://cu.bgfretail.com/product/productAjax.do", 
@@ -202,16 +201,16 @@ def crawl_cu(supabase):
             except: break
 
     if len(all_cu_items) > 0:
-        print(f"✅ CU 총 {len(all_cu_items)}개 수집 성공. 저장 중...")
+        print(f"   💾 CU {len(all_cu_items)}개 Upsert 중...")
         try:
             unique_items = {p['external_id']: p for p in all_cu_items}.values()
             items_list = list(unique_items)
             for i in range(0, len(items_list), 100):
-                supabase.table("new_products").insert(items_list[i:i+100]).execute()
-            print("🎉 CU 데이터 업데이트 완료!")
+                supabase.table("new_products").upsert(
+                    items_list[i:i+100], 
+                    on_conflict="brand_id,external_id"
+                ).execute()
         except Exception as e: print(f"❌ CU 저장 실패: {e}")
-    else:
-        print("😱 경고: CU 데이터를 수집하지 못했습니다.")
 
 # ==========================================
 # 🏪 2. GS25 크롤링
@@ -239,36 +238,19 @@ def crawl_gs25(supabase):
     print("\n🚀 GS25 크롤링 시작...")
     session, token = get_gs25_token()
     if not token:
-        print("❌ GS25 토큰 획득 실패.")
+        print("❌ GS25 토큰 실패")
         return
 
-    print(f"   🔑 토큰 획득 성공")
-    
-    session.headers.update({
-        "Accept": "application/json, text/javascript, */*; q=0.01",
-        "X-Requested-With": "XMLHttpRequest",
-        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-        "Origin": "https://gs25.gsretail.com"
-    })
-
+    session.headers.update({"Accept": "application/json", "X-Requested-With": "XMLHttpRequest"})
     all_gs_items = []
-    promo_types = ["ONE_TO_ONE", "TWO_TO_ONE"] 
-    promo_map = {"ONE_TO_ONE": "1+1", "TWO_TO_ONE": "2+1"}
 
-    for p_type in promo_types:
+    for p_type in ["ONE_TO_ONE", "TWO_TO_ONE"]:
         print(f"🔎 GS25 조회: {p_type}")
         for page in range(1, 20):
             try:
-                url = "https://gs25.gsretail.com/gscvs/ko/products/event-goods-search"
-                payload = {
-                    "CSRFToken": token, "pageNum": str(page), "pageSize": "50", 
-                    "parameterList": p_type
-                }
-                r = session.post(url, data=payload, timeout=10)
-                try: data = r.json()
-                except: data = json.loads(r.text)
-                if isinstance(data, str): data = json.loads(data)
-                
+                r = session.post("https://gs25.gsretail.com/gscvs/ko/products/event-goods-search",
+                               data={"CSRFToken": token, "pageNum": str(page), "pageSize": "50", "parameterList": p_type})
+                data = json.loads(r.text) if not isinstance(r.json(), dict) else r.json()
                 results = data.get("results", [])
                 if not results: break
                 
@@ -278,6 +260,7 @@ def crawl_gs25(supabase):
                     att_id = item.get("attFileId", "")
                     id_match = re.search(r'(\d+)', att_id)
                     ext_id = int(id_match.group(1)[-18:]) if id_match else int(time.time()*1000)
+                    promo_map = {"ONE_TO_ONE": "1+1", "TWO_TO_ONE": "2+1"}
                     
                     all_gs_items.append({
                         "title": title,
@@ -293,32 +276,26 @@ def crawl_gs25(supabase):
                         "is_new": False
                     })
                 time.sleep(0.1)
-            except Exception as e: break
+            except: break
 
     if len(all_gs_items) > 0:
-        print(f"✅ GS25 총 {len(all_gs_items)}개 수집 성공. 저장 중...")
+        print(f"   💾 GS25 {len(all_gs_items)}개 Upsert 중...")
         try:
-            supabase.table("new_products").delete().eq("brand_id", 2).execute()
             unique_gs = {p['external_id']: p for p in all_gs_items}.values()
             items_list = list(unique_gs)
             for i in range(0, len(items_list), 100):
-                supabase.table("new_products").insert(items_list[i:i+100]).execute()
-            print("🎉 GS25 데이터 업데이트 완료!")
+                supabase.table("new_products").upsert(items_list[i:i+100], on_conflict="brand_id,external_id").execute()
         except Exception as e: print(f"❌ GS25 저장 실패: {e}")
-    else:
-        print("😱 경고: GS25 데이터 없음")
 
 # ==========================================
-# 🏪 3. 7-Eleven 크롤링 (신규 추가)
+# 🏪 3. 7-Eleven 크롤링 (헤더 보강 및 인코딩)
 # ==========================================
 def parse_seven_eleven(item, fixed_category=None):
     try:
-        # 제목
         name_tag = item.find("div", class_="tit_product")
         if not name_tag: return None
         title = name_tag.get_text(strip=True)
 
-        # 가격
         price_tag = item.find("div", class_="price")
         price = 0
         if price_tag:
@@ -326,7 +303,6 @@ def parse_seven_eleven(item, fixed_category=None):
             if span:
                 price = int(span.get_text(strip=True).replace(",", ""))
 
-        # 이미지
         img_tag = item.find("div", class_="pic_product").find("img")
         img_src = ""
         if img_tag:
@@ -334,7 +310,6 @@ def parse_seven_eleven(item, fixed_category=None):
             if img_src and not img_src.startswith("http"):
                 img_src = "https://www.7-eleven.co.kr" + img_src
 
-        # 행사 정보 (1+1, 2+1) - 리스트 페이지에는 보통 아이콘으로 되어있음
         promo = "일반"
         tag_list = item.find("ul", class_="tag_list_01")
         if tag_list:
@@ -343,20 +318,16 @@ def parse_seven_eleven(item, fixed_category=None):
                 text = tag.get_text(strip=True)
                 if "1+1" in text: promo = "1+1"
                 elif "2+1" in text: promo = "2+1"
-                elif "신상품" in text: promo = "NEW" # 세븐일레븐은 신상품 태그도 있음
+                elif "신상품" in text: promo = "NEW"
 
-        # ID 추출 (상세보기 링크 함수에서 추출: fncGoView('1234'))
         gdIdx = None
         link = item.find("a", href=True)
         if link:
-            href = link['href']
-            m = re.search(r"fncGoView\('(\d+)'\)", href)
+            m = re.search(r"fncGoView\('(\d+)'\)", link['href'])
             if m: gdIdx = int(m.group(1))
         
         if not gdIdx: return None
 
-        # 카테고리 결정
-        # Fresh Food는 "간편식사"로 고정, 행사 상품은 키워드 분류
         if fixed_category:
             std_category = fixed_category
         else:
@@ -367,9 +338,9 @@ def parse_seven_eleven(item, fixed_category=None):
             "price": price,
             "image_url": img_src,
             "category": std_category,
-            "original_category": fixed_category if fixed_category else None,
+            "original_category": fixed_category,
             "promotion_type": promo,
-            "brand_id": 3, # 7-Eleven
+            "brand_id": 3,
             "source_url": f"https://www.7-eleven.co.kr/product/productView.asp?pCd={gdIdx}",
             "is_active": True,
             "external_id": gdIdx,
@@ -380,66 +351,75 @@ def parse_seven_eleven(item, fixed_category=None):
 def crawl_seven_eleven(supabase):
     print("\n🚀 7-Eleven 크롤링 시작...")
     
-    # 데이터 초기화
-    supabase.table("new_products").delete().eq("brand_id", 3).execute()
-    
-    all_711_items = []
-    headers = {"User-Agent": "Mozilla/5.0"}
+    # 헤더 보강 (Content-Type 필수)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "Origin": "https://www.7-eleven.co.kr",
+        "Referer": "https://www.7-eleven.co.kr/"
+    }
 
-    # 1. Fresh Food (도시락 등) - 간편식사로 고정
-    print("🔎 7-Eleven 조회: Fresh Food (간편식사)")
+    all_711_items = []
+
+    # 1. Fresh Food
+    print("🔎 7-Eleven: Fresh Food")
     for page in range(1, 10):
         try:
             r = requests.post("https://www.7-eleven.co.kr/product/dosirakNewMoreAjax.asp",
                             data={"intPageSize": 20, "intCurrPage": page},
                             headers=headers, timeout=10)
+            r.encoding = 'utf-8' # 인코딩 명시
             soup = BeautifulSoup(r.text, "html.parser")
             items = soup.find_all("li")
+            
             if not items or len(items) == 0: break
             
+            count = 0
             for item in items:
-                # "데이터가 없습니다" 체크
                 if "데이터가 없습니다" in item.get_text(): break
                 p = parse_seven_eleven(item, fixed_category="간편식사")
-                if p: all_711_items.append(p)
+                if p: 
+                    all_711_items.append(p)
+                    count += 1
+            if count == 0: break
             time.sleep(0.1)
         except: break
 
-    # 2. 행사 상품 (1+1, 2+1) - 키워드 분류
-    # pTab: 1=1+1, 2=2+1
-    promo_tabs = {1: "1+1", 2: "2+1"}
-    
-    for tab_id, promo_name in promo_tabs.items():
-        print(f"🔎 7-Eleven 조회: {promo_name}")
+    # 2. 행사 상품
+    print("🔎 7-Eleven: 행사 상품")
+    for tab_id, promo_name in {1: "1+1", 2: "2+1"}.items():
         for page in range(1, 20):
             try:
                 r = requests.post("https://www.7-eleven.co.kr/product/listMoreAjax.asp",
                                 data={"intPageSize": 20, "intCurrPage": page, "pTab": tab_id},
                                 headers=headers, timeout=10)
+                r.encoding = 'utf-8'
                 soup = BeautifulSoup(r.text, "html.parser")
                 items = soup.find_all("li")
                 
-                # 리스트가 비었거나 특정 클래스가 없으면 종료
-                if not items or (len(items) == 1 and "데이터가 없습니다" in items[0].get_text()): 
-                    break
+                if not items or (len(items) == 1 and "데이터가 없습니다" in items[0].get_text()): break
                 
+                count = 0
                 for item in items:
                     p = parse_seven_eleven(item, fixed_category=None)
                     if p:
-                        p['promotion_type'] = promo_name # 탭 정보로 행사명 강제 지정
+                        p['promotion_type'] = promo_name
                         all_711_items.append(p)
+                        count += 1
+                if count == 0: break
                 time.sleep(0.1)
             except: break
 
     if len(all_711_items) > 0:
-        print(f"✅ 7-Eleven 총 {len(all_711_items)}개 수집 성공. 저장 중...")
+        print(f"   💾 7-Eleven {len(all_711_items)}개 Upsert 중...")
         try:
             unique_items = {p['external_id']: p for p in all_711_items}.values()
             items_list = list(unique_items)
-            
             for i in range(0, len(items_list), 100):
-                supabase.table("new_products").insert(items_list[i:i+100]).execute()
-            print("🎉 7-Eleven 데이터 업데이트 완료!")
+                supabase.table("new_products").upsert(
+                    items_list[i:i+100], 
+                    on_conflict="brand_id,external_id"
+                ).execute()
         except Exception as e: print(f"❌ 7-Eleven 저장 실패: {e}")
     else:
         print("😱 경고: 7-Eleven 데이터 없음")
@@ -449,19 +429,18 @@ def crawl_seven_eleven(supabase):
 # ==========================================
 def main():
     if not SUPABASE_URL or not SUPABASE_KEY:
-        print("❌ 설정 오류: 환경변수 누락")
+        print("❌ 설정 오류")
         return
     
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
     
-    # 🧹 쓰레기 데이터 정리
     try:
         supabase.table("new_products").delete().or_("promotion_type.eq.덤,promotion_type.eq.덤증정,promotion_type.ilike.%GIFT%,original_category.eq.즉석조리").execute()
     except: pass
 
     crawl_cu(supabase)
     crawl_gs25(supabase)
-    crawl_seven_eleven(supabase) # 추가됨
+    crawl_seven_eleven(supabase)
     
     print("\n🎉 모든 크롤링 작업 완료!")
 
