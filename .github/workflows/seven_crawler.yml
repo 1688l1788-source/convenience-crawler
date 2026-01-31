@@ -1,0 +1,33 @@
+name: Test Seven Eleven Crawler
+
+on:
+  workflow_dispatch:  # 수동 실행
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    # ⚠️ 수정됨: Chrome 설치는 requests 방식 크롤러에 필요 없습니다. (속도 향상 위해 제거)
+    # 만약 Selenium을 쓰는 코드로 바꾸셨다면 다시 넣어야 합니다.
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        # ⚠️ 수정됨: 코드 실행에 필수적인 라이브러리들 추가
+        pip install requests beautifulsoup4 supabase urllib3 lxml
+    
+    - name: Test Crawler
+      env:
+        # ⚠️ 수정됨: 이 부분이 없으면 DB 접속을 못합니다.
+        SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+        SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      run: |
+        python seven_crawler.py
