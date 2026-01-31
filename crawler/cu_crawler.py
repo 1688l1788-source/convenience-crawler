@@ -95,7 +95,11 @@ def parse_cu_product(item, raw_cat_name):
         if "GET" in title and ("아메리카노" in title or "라떼" in title or "커피" in title): return None
 
         price_tag = item.find("div", class_="price")
-        price = int(price_tag.find("strong").get_text(strip=True).replace(",", "")) if price_tag else 0
+        price = 0
+        if price_tag:
+            strong = price_tag.find("strong")
+            if strong:
+                price = int(strong.get_text(strip=True).replace(",", ""))
 
         img_tag = item.find("img")
         img_src = ""
@@ -112,10 +116,10 @@ def parse_cu_product(item, raw_cat_name):
         if badge_tag:
             badge_text = badge_tag.get_text(strip=True).upper()
             if "NEW" in badge_text: is_new = True
+            
             span = badge_tag.find("span")
             if span:
-                promo_text = span.get_text(strip=True)
-                if promo_text not in ["NEW"]: promo = promo_text
+                promo = span.get_text(strip=True)
             else:
                 clean = badge_text.replace("NEW", "").strip()
                 if clean: promo = clean
@@ -165,6 +169,9 @@ def parse_cu_product(item, raw_cat_name):
 def crawl_cu(supabase):
     print("\n🚀 CU 크롤링 시작...")
     
+    # 1. 기존 데이터 삭제 (전체 갱신)
+    supabase.table("new_products").delete().eq("brand_id", 1).execute()
+
     cu_categories = [
         {"id": "10", "name": "간편식사"},
         {"id": "30", "name": "과자류"},
@@ -210,7 +217,10 @@ def crawl_cu(supabase):
                     items_list[i:i+100], 
                     on_conflict="brand_id,external_id"
                 ).execute()
+            print("🎉 CU 업데이트 완료!")
         except Exception as e: print(f"❌ CU 저장 실패: {e}")
+    else:
+        print("😱 경고: CU 데이터 없음")
 
 # ==========================================
 # 🏪 2. GS25 크롤링
@@ -285,10 +295,11 @@ def crawl_gs25(supabase):
             items_list = list(unique_gs)
             for i in range(0, len(items_list), 100):
                 supabase.table("new_products").upsert(items_list[i:i+100], on_conflict="brand_id,external_id").execute()
+            print("🎉 GS25 업데이트 완료")
         except Exception as e: print(f"❌ GS25 저장 실패: {e}")
 
 # ==========================================
-# 🏪 3. 7-Eleven 크롤링 (헤더 보강 및 인코딩)
+# 🏪 3. 7-Eleven 크롤링 (헤더 수정됨)
 # ==========================================
 def parse_seven_eleven(item, fixed_category=None):
     try:
@@ -338,7 +349,7 @@ def parse_seven_eleven(item, fixed_category=None):
             "price": price,
             "image_url": img_src,
             "category": std_category,
-            "original_category": fixed_category,
+            "original_category": fixed_category if fixed_category else None,
             "promotion_type": promo,
             "brand_id": 3,
             "source_url": f"https://www.7-eleven.co.kr/product/productView.asp?pCd={gdIdx}",
@@ -351,24 +362,27 @@ def parse_seven_eleven(item, fixed_category=None):
 def crawl_seven_eleven(supabase):
     print("\n🚀 7-Eleven 크롤링 시작...")
     
-    # 헤더 보강 (Content-Type 필수)
+    # 7-Eleven 초기화 (전체 갱신 권장)
+    supabase.table("new_products").delete().eq("brand_id", 3).execute()
+    
+    all_711_items = []
+    
+    # [중요] 세븐일레븐 맞춤 헤더
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-        "Origin": "https://www.7-eleven.co.kr",
-        "Referer": "https://www.7-eleven.co.kr/"
+        "Origin": "https://www.7-eleven.co.kr"
     }
 
-    all_711_items = []
-
-    # 1. Fresh Food
+    # 1. Fresh Food (도시락 등) - Referer 필수
     print("🔎 7-Eleven: Fresh Food")
+    headers["Referer"] = "https://www.7-eleven.co.kr/product/bestdosirakList.asp"
+    
     for page in range(1, 10):
         try:
             r = requests.post("https://www.7-eleven.co.kr/product/dosirakNewMoreAjax.asp",
-                            data={"intPageSize": 20, "intCurrPage": page},
+                            data={"intPageSize": 10, "intCurrPage": page}, # 사이즈 10으로 조정
                             headers=headers, timeout=10)
-            r.encoding = 'utf-8' # 인코딩 명시
+            r.encoding = 'utf-8'
             soup = BeautifulSoup(r.text, "html.parser")
             items = soup.find_all("li")
             
@@ -383,15 +397,19 @@ def crawl_seven_eleven(supabase):
                     count += 1
             if count == 0: break
             time.sleep(0.1)
-        except: break
+        except Exception as e: 
+            # print(f"7-Eleven FF Error: {e}")
+            break
 
     # 2. 행사 상품
     print("🔎 7-Eleven: 행사 상품")
+    headers["Referer"] = "https://www.7-eleven.co.kr/product/presentList.asp"
+    
     for tab_id, promo_name in {1: "1+1", 2: "2+1"}.items():
         for page in range(1, 20):
             try:
                 r = requests.post("https://www.7-eleven.co.kr/product/listMoreAjax.asp",
-                                data={"intPageSize": 20, "intCurrPage": page, "pTab": tab_id},
+                                data={"intPageSize": 10, "intCurrPage": page, "pTab": tab_id},
                                 headers=headers, timeout=10)
                 r.encoding = 'utf-8'
                 soup = BeautifulSoup(r.text, "html.parser")
@@ -408,7 +426,9 @@ def crawl_seven_eleven(supabase):
                         count += 1
                 if count == 0: break
                 time.sleep(0.1)
-            except: break
+            except Exception as e: 
+                # print(f"7-Eleven Event Error: {e}")
+                break
 
     if len(all_711_items) > 0:
         print(f"   💾 7-Eleven {len(all_711_items)}개 Upsert 중...")
@@ -420,9 +440,10 @@ def crawl_seven_eleven(supabase):
                     items_list[i:i+100], 
                     on_conflict="brand_id,external_id"
                 ).execute()
+            print("🎉 7-Eleven 업데이트 완료")
         except Exception as e: print(f"❌ 7-Eleven 저장 실패: {e}")
     else:
-        print("😱 경고: 7-Eleven 데이터 없음")
+        print("😱 경고: 7-Eleven 데이터 없음. 헤더나 URL 확인 필요.")
 
 # ==========================================
 # 🚀 메인 실행
